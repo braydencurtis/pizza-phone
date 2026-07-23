@@ -58,21 +58,21 @@ def _attempt_loop(
             **dispatch_kwargs,
         )
 
-        if result["outcome"] == "succeed":
-            router.logger.log(result | {"timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC)})
-            channel.verbose("Code accepted, connecting to upstream")
-            channel.set_variable("UPSTREAM_EXT", dispatch_kwargs.pop("upstream_ext", ""))
-            channel.exec_app("Goto", "pizza-success,s,1")
-            return
+    if result["outcome"] == "succeed":
+        router.logger.log(result | {"timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC)})
+        channel.verbose("Code accepted, connecting to upstream")
+        channel.set_variable("UPSTREAM_EXT", dispatch_kwargs.pop("upstream_ext", ""))
+        channel.exec_app("Goto", "pizza-success,s,1")
+        return
 
-        if result["outcome"] == "exile":
-            channel.verbose("Exile — max attempts exhausted")
-            channel.stream_file(exile_audio)
-            channel.hangup()
-            return
+    if result["outcome"] == "exile":
+        channel.verbose("Exile — max attempts exhausted")
+        channel.stream_file(exile_audio)
+        channel.hangup()
+        return
 
-        channel.verbose("Wrong answer, playing error tone")
-        channel.stream_file("beep")
+    channel.verbose("Wrong answer, playing error tone")
+    channel.stream_file("beep")
 
 
 def main() -> None:
@@ -196,12 +196,12 @@ def handle_roguelike(
 
     tts_backend = SayBackend()
     ctx = RoguelikeContextImpl(channel=channel, tts=tts_backend)
-    path = handle_roguelike_mode(ctx, code)
-    channel.verbose(f"Roguelike path: {path}")
+    result = handle_roguelike_mode(ctx, code)
+    channel.verbose(f"Roguelike path: {result['path']}")
 
-    result = router.dispatch(path=path)
+    dispatch_result = router.dispatch()
 
-    if result["outcome"] == "succeed":
+    if dispatch_result["outcome"] == "succeed":
         channel.verbose("Roguelike complete, connecting to upstream")
         channel.set_variable("UPSTREAM_EXT", upstream_ext)
         channel.exec_app("Goto", "pizza-success,s,1")

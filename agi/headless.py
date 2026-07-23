@@ -22,5 +22,11 @@ class HeadlessRoguelikeContext:
 def run_roguelike(code: str) -> dict[str, object]:
     """Run the roguelike mode headlessly, walking the tree to its terminal node."""
     ctx = HeadlessRoguelikeContext()
-    path = mode_roguelike.handle(ctx, code)
-    return {"outcome": "succeed" if path else "fail", "path": path, "attempts": len(path)}
+    result = mode_roguelike.handle(ctx, code)
+    path = result["path"]
+    return {
+        "outcome": "succeed" if path else "fail",
+        "path": path,
+        "nodes_visited": result["nodes_visited"],
+        "attempts": len(path),
+    }

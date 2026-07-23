@@ -45,8 +45,8 @@ def test_make_tree_different_without_seed() -> None:
 
 def test_handle_collects_path_to_terminal() -> None:
     ctx = MockContext(choices=["1", "1", "1", "1", "1"])
-    path = handle(ctx, "1234", seed=42)
-    assert len(path) >= 1
+    result = handle(ctx, "1234", seed=42)
+    assert len(result["path"]) >= 1
 
 
 def test_handle_terminates_at_terminal_node() -> None:
@@ -57,9 +57,9 @@ def test_handle_terminates_at_terminal_node() -> None:
 
 def test_handle_invalid_choice_repeats_node() -> None:
     ctx = MockContext(choices=["9", "1", "1", "1", "1", "1"])
-    path = handle(ctx, "1234", seed=42)
-    assert len(path) >= 1
-    assert len(ctx.spoken) > len(path)
+    result = handle(ctx, "1234", seed=42)
+    assert len(result["path"]) >= 1
+    assert len(ctx.spoken) > len(result["path"])
 
 
 def test_handle_asks_for_valid_keys() -> None:
@@ -70,19 +70,61 @@ def test_handle_asks_for_valid_keys() -> None:
 
 def test_path_deterministic_for_same_seed() -> None:
     choices = ["1", "1", "1", "1", "1"]
-    path_a = handle(MockContext(choices=choices), "1234", seed=42)
-    path_b = handle(MockContext(choices=choices), "5678", seed=42)
-    assert path_a == path_b
+    result_a = handle(MockContext(choices=choices), "1234", seed=42)
+    result_b = handle(MockContext(choices=choices), "5678", seed=42)
+    assert result_a["path"] == result_b["path"]
 
 
 def test_alternate_path() -> None:
     ctx = MockContext(choices=["2", "1", "1", "1", "1"])
-    path = handle(ctx, "1234", seed=42)
-    assert len(path) >= 1
+    result = handle(ctx, "1234", seed=42)
+    assert len(result["path"]) >= 1
     assert len(ctx.spoken) >= 2
 
 
 def test_handle_respects_max_depth() -> None:
     ctx = MockContext(choices=["1"] * 30)
-    path = handle(ctx, "1234", seed=42, max_depth=5)
-    assert len(path) <= 5
+    result = handle(ctx, "1234", seed=42, max_depth=5)
+    assert len(result["path"]) <= 5
+
+
+def test_handle_tracks_nodes_visited() -> None:
+    ctx = MockContext(choices=["1", "1", "1", "1", "1"])
+    result = handle(ctx, "1234", seed=42)
+    assert "nodes_visited" in result
+    assert len(result["nodes_visited"]) >= 1
+    assert result["nodes_visited"][0] == 0
+
+
+def test_handle_nodes_visited_includes_terminal() -> None:
+    ctx = MockContext(choices=["1", "1", "1", "1", "1"])
+    result = handle(ctx, "1234", seed=42)
+    tree = make_tree(seed=42)
+    terminal_idx = len(tree) - 1
+    assert result["nodes_visited"][-1] == terminal_idx
+
+
+def test_handle_nodes_visited_deterministic_for_same_seed() -> None:
+    choices = ["1", "1", "1", "1", "1"]
+    result_a = handle(MockContext(choices=choices), "1234", seed=42)
+    result_b = handle(MockContext(choices=choices), "1234", seed=42)
+    assert result_a["nodes_visited"] == result_b["nodes_visited"]
+
+
+def test_handle_nodes_visited_repeats_on_invalid_choice() -> None:
+    ctx = MockContext(choices=["9", "1", "1", "1", "1", "1"])
+    result = handle(ctx, "1234", seed=42)
+    visited = result["nodes_visited"]
+    assert visited[0] == visited[1]
+
+
+def test_handle_path_and_nodes_visited_lengths_match_spoken() -> None:
+    ctx = MockContext(choices=["1", "1", "1", "1", "1"])
+    result = handle(ctx, "1234", seed=42)
+    assert len(result["nodes_visited"]) == len(ctx.spoken) - 1
+
+
+def test_handle_max_depth_includes_nodes_visited() -> None:
+    ctx = MockContext(choices=["1"] * 30)
+    result = handle(ctx, "1234", seed=42, max_depth=5)
+    assert len(result["nodes_visited"]) <= 6

@@ -53,6 +53,7 @@ class Router:
         if mode == "tweeted":
             handler_result = mode_tweeted.handle(code_attempt or "", code, attempt, max_attempts)
         elif mode == "puzzle":
+            assert puzzle_id is not None
             handler_result = mode_puzzle.handle(
                 answer=answer or "",
                 expected_code=code,
@@ -73,6 +74,7 @@ class Router:
             "duration": duration,
             "attempts": handler_result.get("attempts", 0),
             "path": handler_result.get("path", []),
+            "nodes_visited": handler_result.get("nodes_visited", []),
         }
         if puzzle_id:
             session["puzzle_id"] = puzzle_id

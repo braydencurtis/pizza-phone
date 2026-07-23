@@ -78,18 +78,20 @@ def make_tree(seed: int | None = None) -> list[Node]:
     return tree
 
 
-def handle(ctx: RoguelikeContext, code: str, seed: int | None = None, max_depth: int = 20) -> list[str]:
+def handle(ctx: RoguelikeContext, code: str, seed: int | None = None, max_depth: int = 20) -> dict[str, list[str] | list[int]]:
     tree = make_tree(seed=seed)
     path: list[str] = []
+    nodes_visited: list[int] = []
     idx = 0
 
     while len(path) < max_depth:
         node = tree[idx]
+        nodes_visited.append(idx)
         ctx.speak(node["text"])
 
         if _is_terminal(node):
             ctx.speak(f"The code is {code}. Hang up and dial it now.")
-            return path
+            return {"path": path, "nodes_visited": nodes_visited}
 
         choices = cast(ChoiceNode, node)["choices"]
         choice = ctx.read_choice(str(list(choices.keys())))
@@ -100,4 +102,4 @@ def handle(ctx: RoguelikeContext, code: str, seed: int | None = None, max_depth:
         idx = choices[choice]
 
     ctx.speak(f"The code is {code}. Hang up and dial it now.")
-    return path
+    return {"path": path, "nodes_visited": nodes_visited}

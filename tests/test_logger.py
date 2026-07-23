@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from agi.logger import CallSessionLogger
-from agi.types import Mode, Outcome
 
 # Use plain str values — the types are documented in types.py
 
@@ -20,7 +19,7 @@ def _session(
     timestamp: datetime | None = None,
 ) -> dict[str, Any]:
     return {
-        "timestamp": timestamp or datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        "timestamp": timestamp or datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC),
         "mode": mode,
         "outcome": outcome,
         "duration": duration,
@@ -72,7 +71,7 @@ class TestCallSessionLogger:
         logger = CallSessionLogger(log_dir)
 
         # Default log file name uses today's date
-        expected = f"calls-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.jsonl"
+        expected = f"calls-{datetime.now(UTC).strftime('%Y-%m-%d')}.jsonl"
         assert logger.log_file_name == expected
 
     def test_logs_path_for_roguelike_mode(self, tmp_path: Path) -> None:
@@ -91,7 +90,7 @@ class TestCallSessionLogger:
         log_dir.mkdir()
         logger = CallSessionLogger(log_dir)
 
-        ts = datetime(2025, 6, 15, 8, 30, 0, tzinfo=timezone.utc)
+        ts = datetime(2025, 6, 15, 8, 30, 0, tzinfo=UTC)
         logger.log(_session(timestamp=ts))
 
         log_file = log_dir / logger.log_file_name

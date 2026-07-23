@@ -11,7 +11,9 @@ import sys
 from pathlib import Path
 
 from agi.agi_channel import AGIChannel
+from agi.mode_roguelike import handle as handle_roguelike_mode
 from agi.router import Router
+from agi.tts import SayBackend, TTSBackend, synthesize
 
 
 def main() -> None:
@@ -120,6 +122,24 @@ def handle_puzzle(
         channel.hangup()
 
 
+class RoguelikeContextImpl:
+    def __init__(self, channel: AGIChannel, tts: TTSBackend) -> None:
+        self.channel = channel
+        self.tts = tts
+
+    def speak(self, text: str) -> None:
+        audio_path = synthesize(text, backend=self.tts)
+        self.channel.verbose(f"TTS: {audio_path}")
+        self.channel.exec_app("Playback", str(audio_path))
+
+    def read_choice(self, keys: str) -> str:
+        return self.channel.read_digits(
+            filename="silence/beam",
+            num_digits=1,
+            timeout=15000,
+        )
+
+
 def handle_roguelike(
     channel: AGIChannel,
     router: Router,
@@ -129,21 +149,10 @@ def handle_roguelike(
     """Roguelike mode: navigate a DTMF phone tree."""
     channel.verbose("Mode: roguelike — navigating phone tree")
 
-    path: list[str] = []
-    max_depth = 5
-
-    while len(path) < max_depth:
-        choice = channel.read_digits(
-            filename="silence/beam",
-            num_digits=1,
-            timeout=15000,
-        )
-
-        if not choice:
-            break
-
-        path.append(choice)
-        channel.verbose(f"Path so far: {path}")
+    tts_backend = SayBackend()
+    ctx = RoguelikeContextImpl(channel=channel, tts=tts_backend)
+    path = handle_roguelike_mode(ctx, code)
+    channel.verbose(f"Roguelike path: {path}")
 
     result = router.dispatch(path=path)
 

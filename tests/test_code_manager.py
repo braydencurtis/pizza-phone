@@ -3,7 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agi.code_manager import read_code, read_mode, update_code, update_mode, update_mode_and_code
+from agi.code_manager import (
+    read_code,
+    read_mode,
+    update_code,
+    update_mode,
+    update_mode_and_code,
+)
 
 
 def _write_config(path: Path) -> None:

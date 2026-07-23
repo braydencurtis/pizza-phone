@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any
 
 
 class AGIChannel:
@@ -90,7 +89,7 @@ class AGIChannel:
             cmd += f" {escape_key}"
         resp = self.command(cmd)
         # After READ, we need to retrieve the variable
-        val_resp = self.command(f"GET VARIABLE result")
+        val_resp = self.command("GET VARIABLE result")
         # Response is either "200 result=..." or "200 result="
         if "result=" in val_resp:
             return val_resp.split("result=")[1].strip()

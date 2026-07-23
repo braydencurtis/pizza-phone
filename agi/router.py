@@ -2,18 +2,37 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import agi.mode_puzzle as mode_puzzle
-import agi.mode_roguelike as mode_roguelike
-import agi.mode_tweeted as mode_tweeted
+from agi import mode_puzzle, mode_roguelike, mode_tweeted
 from agi.logger import CallSessionLogger
 from agi.types import Mode, Outcome
 
-
 VALID_MODES: list[Mode] = ["tweeted", "puzzle", "roguelike"]
+
+
+class _RouterRoguelikeContext:
+    """In-memory RoguelikeContext that auto-picks the first choice at each node."""
+
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    def speak(self, text: str) -> None:
+        self.spoken.append(text)
+
+    def read_choice(self, keys: str) -> str:
+        for ch in keys:
+            if ch.isdigit():
+                return ch
+        return "1"
+
+
+def _run_roguelike(code: str) -> dict[str, object]:
+    ctx = _RouterRoguelikeContext()
+    path = mode_roguelike.handle(ctx, code)
+    return {"outcome": "succeed" if path else "fail", "path": path, "attempts": len(path)}
 
 
 class Router:
@@ -51,13 +70,13 @@ class Router:
         elif mode == "puzzle":
             handler_result = mode_puzzle.handle(answer or "", code)
         else:
-            handler_result = mode_roguelike.handle(path or [], code)
+            handler_result = _run_roguelike(code)
 
         duration = round(time.monotonic() - start, 3)
         outcome: Outcome = handler_result["outcome"]
 
         session = {
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": datetime.now(UTC),
             "mode": mode,
             "outcome": outcome,
             "duration": duration,

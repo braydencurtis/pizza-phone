@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from agi.router import Router
-from agi.types import Mode
 
 
 def _write_config(config_dir: Path, mode: str = "tweeted", code: str = "1234") -> None:

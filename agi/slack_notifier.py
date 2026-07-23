@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 from urllib.request import Request, urlopen
 
 
 class SlackNotifier:
 
-    def __init__(self, webhook_url: Optional[str]) -> None:
+    def __init__(self, webhook_url: str | None) -> None:
         self.webhook_url = webhook_url
 
     def send_rotation_notice(self, mode: str, code: str) -> bool:

@@ -88,6 +88,53 @@ class TestRouter:
         assert result["outcome"] == "fail"
         assert result["mode"] == "tweeted"
 
+    def test_puzzle_succeed_returns_puzzle_id(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        _write_config(config_dir, mode="puzzle", code="4242")
+
+        router = _make_router(config_dir, log_dir)
+        result = router.dispatch(answer="4242", puzzle_id="riddle-001.wav")
+        assert result["outcome"] == "succeed"
+        assert result["puzzle_id"] == "riddle-001.wav"
+
+    def test_puzzle_exile_on_max_attempts(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        _write_config(config_dir, mode="puzzle", code="4242")
+
+        router = _make_router(config_dir, log_dir)
+        result = router.dispatch(answer="0000", attempt=3, puzzle_id="riddle-002.wav")
+        assert result["outcome"] == "exile"
+        assert result["attempts"] == 3
+
+    def test_puzzle_fail_returns_fail_on_attempt_below_max(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        _write_config(config_dir, mode="puzzle", code="4242")
+
+        router = _make_router(config_dir, log_dir)
+        result = router.dispatch(answer="0000", attempt=2, puzzle_id="riddle-003.wav")
+        assert result["outcome"] == "fail"
+        assert result["attempts"] == 2
+
+    def test_puzzle_log_contains_puzzle_id(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        _write_config(config_dir, mode="puzzle", code="7890")
+
+        router = _make_router(config_dir, log_dir)
+        router.dispatch(answer="7890", puzzle_id="riddle-001.wav")
+
+        log_files = list(log_dir.glob("calls-*.jsonl"))
+        assert len(log_files) == 1
+        entry = json.loads(log_files[0].read_text().strip())
+        assert entry["puzzle_id"] == "riddle-001.wav"
+
     def test_unknown_mode_raises_value_error(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         log_dir = tmp_path / "logs"

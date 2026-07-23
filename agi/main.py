@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from agi.agi_channel import AGIChannel
+from agi.mode_puzzle import PuzzleSelector
 from agi.mode_roguelike import handle as handle_roguelike_mode
 from agi.router import Router
 from agi.tts import SayBackend, TTSBackend, synthesize
@@ -37,7 +38,7 @@ def main() -> None:
         if mode == "tweeted":
             handle_tweeted(channel, router, code, max_attempts, upstream_ext)
         elif mode == "puzzle":
-            handle_puzzle(channel, router, code, upstream_ext)
+            handle_puzzle(channel, router, code, max_attempts, upstream_ext)
         elif mode == "roguelike":
             handle_roguelike(channel, router, code, upstream_ext)
         else:
@@ -60,7 +61,6 @@ def handle_tweeted(
     channel.verbose("Mode: tweeted — waiting for code entry")
 
     for attempt in range(1, max_attempts + 1):
-        remaining = max_attempts - attempt + 1
         channel.verbose(f"Attempt {attempt}/{max_attempts}")
 
         digit_count = len(code)
@@ -97,29 +97,60 @@ def handle_puzzle(
     channel: AGIChannel,
     router: Router,
     code: str,
+    max_attempts: int,
     upstream_ext: str,
 ) -> None:
-    """Puzzle mode: play audio puzzle, collect answer."""
+    """Puzzle mode: play audio riddle, collect DTMF answer with attempt loop."""
+    base = Path(__file__).resolve().parent.parent
+    pool_dir = base / "audio" / "puzzles"
+
     channel.verbose("Mode: puzzle — presenting audio puzzle")
 
-    channel.stream_file("silence/beam")
+    puzzle_path = PuzzleSelector(pool_dir).pick()
+    puzzle_id = puzzle_path.name
+    channel.verbose(f"Puzzle selected: {puzzle_id}")
+
+    channel.stream_file(str(puzzle_path.with_suffix("")).replace(str(base / "audio"), ""))
 
     digit_count = len(code)
-    answer = channel.read_digits(
-        filename="silence/beam",
-        num_digits=digit_count,
-        timeout=30000,
-    )
 
-    result = router.dispatch(answer=answer)
+    for attempt in range(1, max_attempts + 1):
+        channel.verbose(f"Puzzle attempt {attempt}/{max_attempts}")
 
-    if result["outcome"] == "succeed":
-        channel.verbose("Puzzle solved, connecting to upstream")
-        channel.set_variable("UPSTREAM_EXT", upstream_ext)
-        channel.exec_app("Goto", "pizza-success,s,1")
-    else:
-        channel.verbose("Puzzle failed, hanging up")
-        channel.hangup()
+        answer = channel.read_digits(
+            filename="silence/beam",
+            num_digits=digit_count,
+            timeout=30000,
+        )
+
+        if not answer:
+            channel.verbose("No digits entered, hanging up")
+            channel.hangup()
+            return
+
+        result = router.dispatch(
+            answer=answer,
+            attempt=attempt,
+            puzzle_id=puzzle_id,
+        )
+
+        if result["outcome"] == "succeed":
+            channel.verbose("Puzzle solved, connecting to upstream")
+            channel.set_variable("UPSTREAM_EXT", upstream_ext)
+            channel.exec_app("Goto", "pizza-success,s,1")
+            return
+
+        if result["outcome"] == "exile":
+            channel.verbose("Exile — max attempts exhausted")
+            channel.stream_file("voicemail/busy")
+            channel.hangup()
+            return
+
+        channel.verbose("Wrong answer, playing error tone")
+        channel.stream_file("beep")
+
+    channel.verbose("All attempts failed, hanging up")
+    channel.hangup()
 
 
 class RoguelikeContextImpl:

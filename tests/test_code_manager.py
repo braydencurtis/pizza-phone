@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agi.code_manager import read_code, read_mode, update_code, update_mode
+from agi.code_manager import read_code, read_mode, update_code, update_mode, update_mode_and_code
 
 
 def _write_config(path: Path) -> None:
@@ -34,3 +34,19 @@ class TestCodeManager:
         _write_config(config_path)
         update_mode(config_path, "puzzle")
         assert read_mode(config_path) == "puzzle"
+
+    def test_update_mode_and_code(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "mode.json"
+        _write_config(config_path)
+        update_mode_and_code(config_path, "roguelike", "5678")
+        assert read_mode(config_path) == "roguelike"
+        assert read_code(config_path) == "5678"
+
+    def test_update_mode_and_code_preserves_other_fields(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "mode.json"
+        _write_config(config_path)
+        update_mode_and_code(config_path, "puzzle", "4321")
+        data = json.loads(config_path.read_text())
+        assert data["attempt_limit"] == 3
+        assert data["mode"] == "puzzle"
+        assert data["code"] == "4321"

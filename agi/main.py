@@ -102,7 +102,7 @@ def main() -> None:
         else:
             channel.verbose(f"Unknown mode: {mode}")
             channel.hangup()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — AGI entry point safety net
         channel.verbose(f"AGI error: {e}")
         print(f"AGI error: {e}", file=sys.stderr)
         channel.hangup()

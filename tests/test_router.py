@@ -48,9 +48,22 @@ class TestRouter:
         _write_config(config_dir, mode="puzzle", code="7890")
 
         router = _make_router(config_dir, log_dir)
-        result = router.dispatch(answer="7890")
+        result = router.dispatch(answer="7890", puzzle_id="riddle-001.wav")
         assert result["outcome"] in ("succeed", "fail")
         assert result["mode"] == "puzzle"
+
+    def test_puzzle_requires_puzzle_id(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        _write_config(config_dir, mode="puzzle", code="7890")
+
+        router = _make_router(config_dir, log_dir)
+        try:
+            router.dispatch(answer="7890")
+            assert False, "Expected ValueError"
+        except ValueError as e:
+            assert "puzzle_id" in str(e)
 
     def test_dispatches_to_roguelike(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
@@ -134,6 +147,18 @@ class TestRouter:
         assert len(log_files) == 1
         entry = json.loads(log_files[0].read_text().strip())
         assert entry["puzzle_id"] == "riddle-001.wav"
+
+    def test_log_false_skips_logging(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        _write_config(config_dir, mode="tweeted", code="1234")
+
+        router = _make_router(config_dir, log_dir)
+        router.dispatch(code_attempt="1234", log=False)
+
+        log_files = list(log_dir.glob("calls-*.jsonl"))
+        assert len(log_files) == 0
 
     def test_unknown_mode_raises_value_error(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"

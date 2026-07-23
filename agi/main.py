@@ -9,12 +9,70 @@ and either connect to Upstairs Phone or hang up.
 
 import sys
 from pathlib import Path
+from typing import Any
 
 from agi.agi_channel import AGIChannel
 from agi.mode_puzzle import PuzzleSelector
 from agi.mode_roguelike import handle as handle_roguelike_mode
 from agi.router import Router
 from agi.tts import SayBackend, TTSBackend, synthesize
+
+
+def _asterisk_stream_path(wav_path: Path, audio_base: Path) -> str:
+    """Convert a WAV file path to an Asterisk stream filename (no extension, no audio/ prefix)."""
+    return str(wav_path.with_suffix("")).replace(str(audio_base), "", 1).lstrip("/")
+
+
+def _attempt_loop(
+    channel: AGIChannel,
+    router: Router,
+    digit_count: int,
+    timeout: int,
+    max_attempts: int,
+    exile_audio: str,
+    dispatch_kwargs: dict[str, Any],
+) -> None:
+    """Shared attempt loop for modes with DTMF answer collection and attempt limits.
+
+    Collects digits, dispatches to router, handles succeed/exile/fail outcomes.
+    On success, routes to upstream. On exile, plays audio and hangs up.
+    Logs only the final (terminal) outcome.
+    """
+    for attempt in range(1, max_attempts + 1):
+        channel.verbose(f"Attempt {attempt}/{max_attempts}")
+
+        entered = channel.read_digits(
+            filename="silence/beam",
+            num_digits=digit_count,
+            timeout=timeout,
+        )
+
+        if not entered:
+            channel.verbose("No digits entered, hanging up")
+            channel.hangup()
+            return
+
+        result = router.dispatch(
+            attempt=attempt,
+            log=attempt == max_attempts,
+            **dispatch_kwargs,
+        )
+
+        if result["outcome"] == "succeed":
+            router.logger.log(result | {"timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC)})
+            channel.verbose("Code accepted, connecting to upstream")
+            channel.set_variable("UPSTREAM_EXT", dispatch_kwargs.pop("upstream_ext", ""))
+            channel.exec_app("Goto", "pizza-success,s,1")
+            return
+
+        if result["outcome"] == "exile":
+            channel.verbose("Exile — max attempts exhausted")
+            channel.stream_file(exile_audio)
+            channel.hangup()
+            return
+
+        channel.verbose("Wrong answer, playing error tone")
+        channel.stream_file("beep")
 
 
 def main() -> None:
@@ -60,37 +118,18 @@ def handle_tweeted(
     """Tweeted mode: caller enters a code via DTMF to get through."""
     channel.verbose("Mode: tweeted — waiting for code entry")
 
-    for attempt in range(1, max_attempts + 1):
-        channel.verbose(f"Attempt {attempt}/{max_attempts}")
-
-        digit_count = len(code)
-        entered = channel.read_digits(
-            filename="silence/beam",
-            num_digits=digit_count,
-            timeout=15000,
-        )
-
-        if not entered:
-            channel.verbose("No digits entered, hanging up")
-            channel.hangup()
-            return
-
-        result = router.dispatch(code_attempt=entered)
-
-        if result["outcome"] == "succeed":
-            channel.verbose("Code accepted, connecting to upstream")
-            channel.set_variable("UPSTREAM_EXT", upstream_ext)
-            channel.exec_app("Goto", "pizza-success,s,1")
-            return
-        else:
-            if attempt < max_attempts:
-                channel.verbose("Wrong code, playing error tone")
-                channel.stream_file("beep")
-            else:
-                channel.verbose("Max attempts reached, hanging up")
-
-    channel.verbose("All attempts failed, hanging up")
-    channel.hangup()
+    _attempt_loop(
+        channel=channel,
+        router=router,
+        digit_count=len(code),
+        timeout=15000,
+        max_attempts=max_attempts,
+        exile_audio="voicemail/busy",
+        dispatch_kwargs={
+            "code_attempt": None,
+            "upstream_ext": upstream_ext,
+        },
+    )
 
 
 def handle_puzzle(
@@ -103,6 +142,7 @@ def handle_puzzle(
     """Puzzle mode: play audio riddle, collect DTMF answer with attempt loop."""
     base = Path(__file__).resolve().parent.parent
     pool_dir = base / "audio" / "puzzles"
+    audio_base = base / "audio"
 
     channel.verbose("Mode: puzzle — presenting audio puzzle")
 
@@ -110,47 +150,21 @@ def handle_puzzle(
     puzzle_id = puzzle_path.name
     channel.verbose(f"Puzzle selected: {puzzle_id}")
 
-    channel.stream_file(str(puzzle_path.with_suffix("")).replace(str(base / "audio"), ""))
+    channel.stream_file(_asterisk_stream_path(puzzle_path, audio_base))
 
-    digit_count = len(code)
-
-    for attempt in range(1, max_attempts + 1):
-        channel.verbose(f"Puzzle attempt {attempt}/{max_attempts}")
-
-        answer = channel.read_digits(
-            filename="silence/beam",
-            num_digits=digit_count,
-            timeout=30000,
-        )
-
-        if not answer:
-            channel.verbose("No digits entered, hanging up")
-            channel.hangup()
-            return
-
-        result = router.dispatch(
-            answer=answer,
-            attempt=attempt,
-            puzzle_id=puzzle_id,
-        )
-
-        if result["outcome"] == "succeed":
-            channel.verbose("Puzzle solved, connecting to upstream")
-            channel.set_variable("UPSTREAM_EXT", upstream_ext)
-            channel.exec_app("Goto", "pizza-success,s,1")
-            return
-
-        if result["outcome"] == "exile":
-            channel.verbose("Exile — max attempts exhausted")
-            channel.stream_file("voicemail/busy")
-            channel.hangup()
-            return
-
-        channel.verbose("Wrong answer, playing error tone")
-        channel.stream_file("beep")
-
-    channel.verbose("All attempts failed, hanging up")
-    channel.hangup()
+    _attempt_loop(
+        channel=channel,
+        router=router,
+        digit_count=len(code),
+        timeout=30000,
+        max_attempts=max_attempts,
+        exile_audio="voicemail/busy",
+        dispatch_kwargs={
+            "answer": None,
+            "puzzle_id": puzzle_id,
+            "upstream_ext": upstream_ext,
+        },
+    )
 
 
 class RoguelikeContextImpl:

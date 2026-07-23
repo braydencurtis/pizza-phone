@@ -87,7 +87,7 @@ class AGIChannel:
         cmd = f"READ result {filename} {num_digits} {timeout}"
         if escape_key:
             cmd += f" {escape_key}"
-        resp = self.command(cmd)
+        self.command(cmd)
         # After READ, we need to retrieve the variable
         val_resp = self.command("GET VARIABLE result")
         # Response is either "200 result=..." or "200 result="

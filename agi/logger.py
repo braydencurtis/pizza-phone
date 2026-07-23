@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +12,7 @@ class CallSessionLogger:
 
     def __init__(self, log_dir: Path) -> None:
         self.log_dir = log_dir
-        today = datetime.now().__class__.now()
+        today = datetime.now(tz=UTC)
         self.log_file_name = f"calls-{today.strftime('%Y-%m-%d')}.jsonl"
 
     def log(self, session: dict[str, Any]) -> None:

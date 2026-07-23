@@ -36,11 +36,15 @@ class Router:
         path: list[str] | None = None,
         attempt: int = 1,
         puzzle_id: str | None = None,
+        log: bool = True,
     ) -> dict[str, Any]:
         self.load_config()
         mode: str = self.config.get("mode", "tweeted")
         if mode not in VALID_MODES:
             raise ValueError(f"Unknown mode: {mode!r}")
+
+        if mode == "puzzle" and not puzzle_id:
+            raise ValueError("puzzle_id is required for puzzle mode")
 
         start = time.monotonic()
         code: str = self.config.get("code", "0000")
@@ -54,7 +58,7 @@ class Router:
                 expected_code=code,
                 attempt=attempt,
                 max_attempts=max_attempts,
-                puzzle_id=puzzle_id or "",
+                puzzle_id=puzzle_id,
             )
         else:
             handler_result = run_roguelike(code)
@@ -72,7 +76,8 @@ class Router:
         }
         if puzzle_id:
             session["puzzle_id"] = puzzle_id
-        self.logger.log(session)
+        if log:
+            self.logger.log(session)
 
         return {
             "mode": mode,

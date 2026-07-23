@@ -1,0 +1,8 @@
+# Logs
+logs/*.json
+logs/*.jsonl
+logs/*.log
+
+# Python
+__pycache__/
+*.py[cod]

@@ -141,9 +141,11 @@ class TestDetectBackend:
             assert result == SayBackend
 
     def test_raises_when_no_backend_available(self) -> None:
-        with patch("core.tts.shutil.which", return_value=None):
-            with pytest.raises(RuntimeError, match="No TTS backend available"):
-                detect_backend()
+        with (
+            patch("core.tts.shutil.which", return_value=None),
+            pytest.raises(RuntimeError, match="No TTS backend available"),
+        ):
+            detect_backend()
 
 
 class TestSynthesize:
@@ -163,7 +165,6 @@ class TestSynthesize:
 
     def test_auto_detects_backend_when_none_provided(self, tmp_path: Path) -> None:
         with patch("core.tts.detect_backend") as mock_detect:
-            mock_backend = MagicMock()
             mock_detect.return_value = MagicMock
             synthesize("test", output_dir=tmp_path)
             mock_detect.assert_called_once()

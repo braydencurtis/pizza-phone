@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agi.router import Router
+from core.router import Router
 
 
 def _write_config(config_dir: Path, mode: str = "tweeted", code: str = "1234") -> None:

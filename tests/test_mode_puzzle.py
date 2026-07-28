@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from agi.mode_puzzle import PuzzleSelector, handle
+from core.mode_puzzle import PuzzleSelector, handle
 
 
 def _make_pool(tmp_path: Path, names: list[str]) -> Path:

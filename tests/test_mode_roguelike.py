@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agi.mode_roguelike import handle, make_tree
+from core.mode_roguelike import handle, make_tree
 
 
 class MockContext:

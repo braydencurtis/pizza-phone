@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agi.logger import CallSessionLogger
+from core.logger import CallSessionLogger
 
 # Use plain str values — the types are documented in types.py
 

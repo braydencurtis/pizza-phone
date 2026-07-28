@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agi.tts import (
+from core.tts import (
     EspeakBackend,
     FliteBackend,
     SayBackend,
@@ -57,7 +57,7 @@ class TestEspeakBackend:
         self, tmp_path: Path
     ) -> None:
         output = tmp_path / "test.wav"
-        with patch("agi.tts.subprocess.run") as mock_run:
+        with patch("core.tts.subprocess.run") as mock_run:
             backend = EspeakBackend()
             backend.synthesize("Hello world", output)
 
@@ -71,7 +71,7 @@ class TestEspeakBackend:
 
     def test_synthesize_resamples_to_8khz(self, tmp_path: Path) -> None:
         output = tmp_path / "test.wav"
-        with patch("agi.tts.subprocess.run") as mock_run:
+        with patch("core.tts.subprocess.run") as mock_run:
             backend = EspeakBackend()
             backend.synthesize("test", output)
 
@@ -88,7 +88,7 @@ class TestFliteBackend:
         self, tmp_path: Path
     ) -> None:
         output = tmp_path / "test.wav"
-        with patch("agi.tts.subprocess.run") as mock_run:
+        with patch("core.tts.subprocess.run") as mock_run:
             backend = FliteBackend()
             backend.synthesize("Hello world", output)
 
@@ -103,7 +103,7 @@ class TestFliteBackend:
 
     def test_synthesize_resamples_to_8khz(self, tmp_path: Path) -> None:
         output = tmp_path / "test.wav"
-        with patch("agi.tts.subprocess.run") as mock_run:
+        with patch("core.tts.subprocess.run") as mock_run:
             backend = FliteBackend()
             backend.synthesize("test", output)
 
@@ -115,7 +115,7 @@ class TestFliteBackend:
 class TestDetectBackend:
 
     def test_detect_espeak_when_available(self) -> None:
-        with patch("agi.tts.shutil.which") as mock_which:
+        with patch("core.tts.shutil.which") as mock_which:
             mock_which.side_effect = lambda x: "/usr/bin/" + x
             result = detect_backend()
             assert result == EspeakBackend
@@ -126,7 +126,7 @@ class TestDetectBackend:
                 return None
             return "/usr/bin/" + binary
 
-        with patch("agi.tts.shutil.which", side_effect=which_side_effect):
+        with patch("core.tts.shutil.which", side_effect=which_side_effect):
             result = detect_backend()
             assert result == FliteBackend
 
@@ -136,12 +136,12 @@ class TestDetectBackend:
                 return "/usr/bin/say"
             return None
 
-        with patch("agi.tts.shutil.which", side_effect=which_side_effect):
+        with patch("core.tts.shutil.which", side_effect=which_side_effect):
             result = detect_backend()
             assert result == SayBackend
 
     def test_raises_when_no_backend_available(self) -> None:
-        with patch("agi.tts.shutil.which", return_value=None):
+        with patch("core.tts.shutil.which", return_value=None):
             with pytest.raises(RuntimeError, match="No TTS backend available"):
                 detect_backend()
 
@@ -162,7 +162,7 @@ class TestSynthesize:
         assert str(tmp_path) in str(result)
 
     def test_auto_detects_backend_when_none_provided(self, tmp_path: Path) -> None:
-        with patch("agi.tts.detect_backend") as mock_detect:
+        with patch("core.tts.detect_backend") as mock_detect:
             mock_backend = MagicMock()
             mock_detect.return_value = MagicMock
             synthesize("test", output_dir=tmp_path)
@@ -170,7 +170,7 @@ class TestSynthesize:
 
     def test_allows_custom_backend_via_protocol(self, tmp_path: Path) -> None:
         mock_backend = MagicMock()
-        with patch("agi.tts.SayBackend"):
+        with patch("core.tts.SayBackend"):
             synthesize("test", backend=mock_backend, output_dir=tmp_path)
 
             mock_backend.synthesize.assert_called_once()

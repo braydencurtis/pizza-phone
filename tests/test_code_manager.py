@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agi.code_manager import (
+from core.code_manager import (
     read_code,
     read_mode,
     update_code,

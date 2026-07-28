@@ -15,9 +15,33 @@ blocking AGI scripts. See ADR-0001 and epic #13.
 - `ari_call_io.py` — `ARICallIO`: adapts the async `ARIClient` to the
   synchronous `core.CallIO` protocol. This is where the sync→async shift is
   absorbed (see below).
+- `call_store.py` — `CallStore`: the SQLite call-history store. Supersedes the
+  JSONL logger (`core/logger.py`). A `CallRecord` per completed Call Session in
+  a single-file `calls` table, queryable by mode/outcome/date. Stdlib `sqlite3`
+  run off the event loop via `asyncio.to_thread` (see below). The `recording_*`
+  columns hold WAV paths and stay empty until Phase 3.
 
-The `CallSession` dispatch (#19) and the dashboard WS/HTTP server land in later
-Phase-1/Phase-2 issues.
+The `CallSession` dispatch that writes to the store (#19) and the dashboard
+WS/HTTP server that reads from it (Phase 2) land in later issues.
+
+## The call-history store
+
+`CallStore` is the queryable record of every completed Call Session, replacing
+the JSONL logger. The console's needs are query-shaped — filter by
+mode/outcome/date, paginate, later join calls to their recordings and hunt
+clips for video — so history lives in a single-file SQLite database
+(`CONTEXT.md`, "Call logging / persistence").
+
+Access is stdlib `sqlite3`, not `aiosqlite`: a booth logs a handful of calls a
+day, so the dependency would buy nothing. To keep blocking file I/O off the
+engine's event loop, each public method (`initialize` / `add` / `get` /
+`query`) is a coroutine that runs its query in a worker thread via
+`asyncio.to_thread`, opening a fresh connection per call so nothing is shared
+across threads. (Consequence: an in-memory `:memory:` database won't work —
+each operation would open an empty DB; use a file path.) A `CallRecord`
+round-trips through the twelve-column `calls` table with datetimes stored as
+ISO 8601 UTC text (so date-range filters are plain string comparisons) and the
+per-mode `detail` extras as JSON.
 
 ## The ARI CallIO adapter
 

@@ -171,6 +171,14 @@ class ARIClient:
             digits.append(digit)
         return "".join(digits)
 
+    async def set_channel_var(self, channel_id: str, variable: str, value: str) -> None:
+        """Set a channel variable (e.g. ``UPSTREAM_EXT`` before a success ``continue``)."""
+        await self._request(
+            "POST",
+            f"/channels/{channel_id}/variable",
+            params={"variable": variable, "value": value},
+        )
+
     async def continue_in_dialplan(
         self,
         channel_id: str,

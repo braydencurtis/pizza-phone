@@ -3,7 +3,12 @@ name = "pizza-phone"
 version = "0.1.0"
 description = "Backrooms-themed phone booth AGI backend"
 requires-python = ">=3.12"
-dependencies = []
+# The ARI Call Engine (engine/) speaks ARI over REST + WebSocket. The AGI
+# scripts (agi/, core/) still need no third-party runtime deps.
+dependencies = [
+    "aiohttp>=3.14",
+    "websockets>=16",
+]
 
 [project.optional-dependencies]
 dev = ["pytest"]

@@ -15,7 +15,7 @@ from agi.agi_channel import AGIChannel
 from agi.mode_puzzle import PuzzleSelector
 from agi.mode_roguelike import handle as handle_roguelike_mode
 from agi.router import Router
-from agi.tts import SayBackend, TTSBackend, synthesize
+from agi.tts import TTSBackend, detect_backend, synthesize
 
 
 def _asterisk_stream_path(wav_path: Path, audio_base: Path) -> str:
@@ -194,7 +194,7 @@ def handle_roguelike(
     """Roguelike mode: navigate a DTMF phone tree."""
     channel.verbose("Mode: roguelike — navigating phone tree")
 
-    tts_backend = SayBackend()
+    tts_backend = detect_backend()()
     ctx = RoguelikeContextImpl(channel=channel, tts=tts_backend)
     result = handle_roguelike_mode(ctx, code)
     channel.verbose(f"Roguelike path: {result['path']}")

@@ -94,7 +94,7 @@ def handle(ctx: RoguelikeContext, code: str, seed: int | None = None, max_depth:
             return {"path": path, "nodes_visited": nodes_visited}
 
         choices = cast(ChoiceNode, node)["choices"]
-        choice = ctx.read_choice(str(list(choices.keys())))
+        choice = ctx.read_choice("".join(choices.keys()))
         if choice not in choices:
             continue
 

@@ -4,7 +4,15 @@ import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from agi.tts import SayBackend, synthesize
+import pytest
+
+from agi.tts import (
+    EspeakBackend,
+    FliteBackend,
+    SayBackend,
+    detect_backend,
+    synthesize,
+)
 
 
 class TestSayBackend:
@@ -43,6 +51,101 @@ class TestSayBackend:
         assert not aiff_path.exists()
 
 
+class TestEspeakBackend:
+
+    def test_synthesize_calls_espeak_with_correct_args(
+        self, tmp_path: Path
+    ) -> None:
+        output = tmp_path / "test.wav"
+        with patch("agi.tts.subprocess.run") as mock_run:
+            backend = EspeakBackend()
+            backend.synthesize("Hello world", output)
+
+            espeak_args = mock_run.call_args_list[0][0][0]
+            assert "espeak" in espeak_args
+            assert "-s" in espeak_args
+            assert "130" in espeak_args
+            assert "-w" in espeak_args
+            assert str(output) in espeak_args
+            assert "Hello world" in espeak_args
+
+    def test_synthesize_resamples_to_8khz(self, tmp_path: Path) -> None:
+        output = tmp_path / "test.wav"
+        with patch("agi.tts.subprocess.run") as mock_run:
+            backend = EspeakBackend()
+            backend.synthesize("test", output)
+
+            ffmpeg_args = mock_run.call_args_list[1][0][0]
+            assert "-ar" in ffmpeg_args
+            assert "8000" in ffmpeg_args
+            assert "-ac" in ffmpeg_args
+            assert "1" in ffmpeg_args
+
+
+class TestFliteBackend:
+
+    def test_synthesize_calls_flite_with_correct_args(
+        self, tmp_path: Path
+    ) -> None:
+        output = tmp_path / "test.wav"
+        with patch("agi.tts.subprocess.run") as mock_run:
+            backend = FliteBackend()
+            backend.synthesize("Hello world", output)
+
+            flite_args = mock_run.call_args_list[0][0][0]
+            assert "flite" in flite_args
+            assert "-tts" in flite_args
+            assert "-s" in flite_args
+            assert "130" in flite_args
+            assert "-o" in flite_args
+            assert str(output) in flite_args
+            assert "Hello world" in flite_args
+
+    def test_synthesize_resamples_to_8khz(self, tmp_path: Path) -> None:
+        output = tmp_path / "test.wav"
+        with patch("agi.tts.subprocess.run") as mock_run:
+            backend = FliteBackend()
+            backend.synthesize("test", output)
+
+            ffmpeg_args = mock_run.call_args_list[1][0][0]
+            assert "-ar" in ffmpeg_args
+            assert "8000" in ffmpeg_args
+
+
+class TestDetectBackend:
+
+    def test_detect_espeak_when_available(self) -> None:
+        with patch("agi.tts.shutil.which") as mock_which:
+            mock_which.side_effect = lambda x: "/usr/bin/" + x
+            result = detect_backend()
+            assert result == EspeakBackend
+
+    def test_detect_flite_when_espeak_missing(self) -> None:
+        def which_side_effect(binary: str):
+            if binary == "espeak":
+                return None
+            return "/usr/bin/" + binary
+
+        with patch("agi.tts.shutil.which", side_effect=which_side_effect):
+            result = detect_backend()
+            assert result == FliteBackend
+
+    def test_detect_say_when_others_missing(self) -> None:
+        def which_side_effect(binary: str):
+            if binary == "say":
+                return "/usr/bin/say"
+            return None
+
+        with patch("agi.tts.shutil.which", side_effect=which_side_effect):
+            result = detect_backend()
+            assert result == SayBackend
+
+    def test_raises_when_no_backend_available(self) -> None:
+        with patch("agi.tts.shutil.which", return_value=None):
+            with pytest.raises(RuntimeError, match="No TTS backend available"):
+                detect_backend()
+
+
 class TestSynthesize:
 
     def test_returns_wav_path(self, tmp_path: Path) -> None:
@@ -58,15 +161,15 @@ class TestSynthesize:
 
         assert str(tmp_path) in str(result)
 
-    def test_uses_default_backend_when_none_provided(self, tmp_path: Path) -> None:
-        result = synthesize("test", output_dir=tmp_path)
-
-        assert result.suffix == ".wav"
-        assert result.exists()
+    def test_auto_detects_backend_when_none_provided(self, tmp_path: Path) -> None:
+        with patch("agi.tts.detect_backend") as mock_detect:
+            mock_backend = MagicMock()
+            mock_detect.return_value = MagicMock
+            synthesize("test", output_dir=tmp_path)
+            mock_detect.assert_called_once()
 
     def test_allows_custom_backend_via_protocol(self, tmp_path: Path) -> None:
         mock_backend = MagicMock()
-        # Patch synthesize to use our mock without calling subprocess
         with patch("agi.tts.SayBackend"):
             synthesize("test", backend=mock_backend, output_dir=tmp_path)
 

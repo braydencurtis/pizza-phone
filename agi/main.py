@@ -1,78 +1,29 @@
-from __future__ import annotations
-
 """Entry point for the AGI call router.
 
-Invoked by Asterisk dialplan via AGI application. Handles the full
-interactive call flow: play audio, collect DTMF, verify code,
-and either connect to Upstairs Phone or hang up.
+Invoked by Asterisk dialplan via AGI application. Thin channel wiring only: it
+builds an :class:`AGICallIO` over the live :class:`AGIChannel` and hands the
+interactive flow to ``core.flow``. All game logic lives in ``core/``.
 """
+
+from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
 
+from agi.agi_call_io import AGICallIO
 from agi.agi_channel import AGIChannel
-from agi.mode_puzzle import PuzzleSelector
-from agi.mode_roguelike import handle as handle_roguelike_mode
-from agi.router import Router
-from agi.tts import TTSBackend, detect_backend, synthesize
+from core import flow
+from core.mode_puzzle import PuzzleSelector
+from core.router import Router
+
+# Asterisk builtin prompts used for feedback (driver-specific media names).
+EXILE_MEDIA = "voicemail/busy"
+WRONG_MEDIA = "beep"
 
 
 def _asterisk_stream_path(wav_path: Path, audio_base: Path) -> str:
     """Convert a WAV file path to an Asterisk stream filename (no extension, no audio/ prefix)."""
     return str(wav_path.with_suffix("")).replace(str(audio_base), "", 1).lstrip("/")
-
-
-def _attempt_loop(
-    channel: AGIChannel,
-    router: Router,
-    digit_count: int,
-    timeout: int,
-    max_attempts: int,
-    exile_audio: str,
-    dispatch_kwargs: dict[str, Any],
-) -> None:
-    """Shared attempt loop for modes with DTMF answer collection and attempt limits.
-
-    Collects digits, dispatches to router, handles succeed/exile/fail outcomes.
-    On success, routes to upstream. On exile, plays audio and hangs up.
-    Logs only the final (terminal) outcome.
-    """
-    for attempt in range(1, max_attempts + 1):
-        channel.verbose(f"Attempt {attempt}/{max_attempts}")
-
-        entered = channel.read_digits(
-            filename="silence/beam",
-            num_digits=digit_count,
-            timeout=timeout,
-        )
-
-        if not entered:
-            channel.verbose("No digits entered, hanging up")
-            channel.hangup()
-            return
-
-        result = router.dispatch(
-            attempt=attempt,
-            log=attempt == max_attempts,
-            **dispatch_kwargs,
-        )
-
-    if result["outcome"] == "succeed":
-        router.logger.log(result | {"timestamp": __import__("datetime").datetime.now(__import__("datetime").UTC)})
-        channel.verbose("Code accepted, connecting to upstream")
-        channel.set_variable("UPSTREAM_EXT", dispatch_kwargs.pop("upstream_ext", ""))
-        channel.exec_app("Goto", "pizza-success,s,1")
-        return
-
-    if result["outcome"] == "exile":
-        channel.verbose("Exile — max attempts exhausted")
-        channel.stream_file(exile_audio)
-        channel.hangup()
-        return
-
-    channel.verbose("Wrong answer, playing error tone")
-    channel.stream_file("beep")
 
 
 def main() -> None:
@@ -91,14 +42,24 @@ def main() -> None:
     upstream_ext = config.get("upstream_extension", "200")
 
     channel.verbose(f"Pizza Phone AGI — mode: {mode}, code: {code}")
+    io = AGICallIO(channel=channel, upstream_ext=upstream_ext)
 
     try:
         if mode == "tweeted":
-            handle_tweeted(channel, router, code, max_attempts, upstream_ext)
+            channel.verbose("Mode: tweeted — waiting for code entry")
+            flow.run_tweeted(
+                io,
+                router,
+                code=code,
+                max_attempts=max_attempts,
+                exile_media=EXILE_MEDIA,
+                wrong_media=WRONG_MEDIA,
+            )
         elif mode == "puzzle":
-            handle_puzzle(channel, router, code, max_attempts, upstream_ext)
+            _run_puzzle(io, router, base, channel, code, max_attempts)
         elif mode == "roguelike":
-            handle_roguelike(channel, router, code, upstream_ext)
+            channel.verbose("Mode: roguelike — navigating phone tree")
+            flow.run_roguelike(io, router, code=code)
         else:
             channel.verbose(f"Unknown mode: {mode}")
             channel.hangup()
@@ -108,106 +69,36 @@ def main() -> None:
         channel.hangup()
 
 
-def handle_tweeted(
-    channel: AGIChannel,
+def _run_puzzle(
+    io: AGICallIO,
     router: Router,
+    base: Path,
+    channel: AGIChannel,
     code: str,
     max_attempts: int,
-    upstream_ext: str,
 ) -> None:
-    """Tweeted mode: caller enters a code via DTMF to get through."""
-    channel.verbose("Mode: tweeted — waiting for code entry")
+    """Select a puzzle from the pool and run the puzzle flow.
 
-    _attempt_loop(
-        channel=channel,
-        router=router,
-        digit_count=len(code),
-        timeout=15000,
-        max_attempts=max_attempts,
-        exile_audio="voicemail/busy",
-        dispatch_kwargs={
-            "code_attempt": None,
-            "upstream_ext": upstream_ext,
-        },
-    )
-
-
-def handle_puzzle(
-    channel: AGIChannel,
-    router: Router,
-    code: str,
-    max_attempts: int,
-    upstream_ext: str,
-) -> None:
-    """Puzzle mode: play audio riddle, collect DTMF answer with attempt loop."""
-    base = Path(__file__).resolve().parent.parent
-    pool_dir = base / "audio" / "puzzles"
+    Puzzle selection is core; resolving the chosen WAV to an Asterisk stream
+    name is AGI-specific, so it stays here.
+    """
     audio_base = base / "audio"
+    pool_dir = audio_base / "puzzles"
 
     channel.verbose("Mode: puzzle — presenting audio puzzle")
-
     puzzle_path = PuzzleSelector(pool_dir).pick()
-    puzzle_id = puzzle_path.name
-    channel.verbose(f"Puzzle selected: {puzzle_id}")
+    channel.verbose(f"Puzzle selected: {puzzle_path.name}")
 
-    channel.stream_file(_asterisk_stream_path(puzzle_path, audio_base))
-
-    _attempt_loop(
-        channel=channel,
-        router=router,
-        digit_count=len(code),
-        timeout=30000,
+    flow.run_puzzle(
+        io,
+        router,
+        code=code,
         max_attempts=max_attempts,
-        exile_audio="voicemail/busy",
-        dispatch_kwargs={
-            "answer": None,
-            "puzzle_id": puzzle_id,
-            "upstream_ext": upstream_ext,
-        },
+        puzzle_id=puzzle_path.name,
+        prompt_media=_asterisk_stream_path(puzzle_path, audio_base),
+        exile_media=EXILE_MEDIA,
+        wrong_media=WRONG_MEDIA,
     )
-
-
-class RoguelikeContextImpl:
-    def __init__(self, channel: AGIChannel, tts: TTSBackend) -> None:
-        self.channel = channel
-        self.tts = tts
-
-    def speak(self, text: str) -> None:
-        audio_path = synthesize(text, backend=self.tts)
-        self.channel.verbose(f"TTS: {audio_path}")
-        self.channel.exec_app("Playback", str(audio_path))
-
-    def read_choice(self, keys: str) -> str:
-        return self.channel.read_digits(
-            filename="silence/beam",
-            num_digits=1,
-            timeout=15000,
-        )
-
-
-def handle_roguelike(
-    channel: AGIChannel,
-    router: Router,
-    code: str,
-    upstream_ext: str,
-) -> None:
-    """Roguelike mode: navigate a DTMF phone tree."""
-    channel.verbose("Mode: roguelike — navigating phone tree")
-
-    tts_backend = detect_backend()()
-    ctx = RoguelikeContextImpl(channel=channel, tts=tts_backend)
-    result = handle_roguelike_mode(ctx, code)
-    channel.verbose(f"Roguelike path: {result['path']}")
-
-    dispatch_result = router.dispatch()
-
-    if dispatch_result["outcome"] == "succeed":
-        channel.verbose("Roguelike complete, connecting to upstream")
-        channel.set_variable("UPSTREAM_EXT", upstream_ext)
-        channel.exec_app("Goto", "pizza-success,s,1")
-    else:
-        channel.verbose("Roguelike failed, hanging up")
-        channel.hangup()
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@ import argparse
 import os
 from pathlib import Path
 
-from agi.code_manager import update_mode_and_code
 from agi.slack_notifier import SlackNotifier
+from core.code_manager import update_mode_and_code
 
 
 def main() -> None:

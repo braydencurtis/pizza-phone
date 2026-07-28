@@ -55,6 +55,14 @@ rsync -avz --delete \
   "${ROOT_DIR}/agi/" \
   "${REMOTE_USER}@${TARGET}:${REMOTE_STAGING}/agi/"
 
+# Deploy channel-agnostic game logic (imported by agi/main.py)
+echo "==> Syncing core/ -> remote staging"
+rsync -avz --delete \
+  --exclude '__pycache__' \
+  --exclude '*.pyc' \
+  "${ROOT_DIR}/core/" \
+  "${REMOTE_USER}@${TARGET}:${REMOTE_STAGING}/core/"
+
 # Deploy Asterisk dialplan configs
 echo "==> Syncing asterisk configs -> remote staging"
 rsync -avz \
@@ -76,6 +84,7 @@ ssh_cmd "
   set -e
   sudo mkdir -p ${AGI_REMOTE_DIR} ${ASTERISK_CONF_DIR}
   sudo rm -rf ${AGI_REMOTE_DIR}/agi && sudo cp -r ${REMOTE_STAGING}/agi ${AGI_REMOTE_DIR}/
+  sudo rm -rf ${AGI_REMOTE_DIR}/core && sudo cp -r ${REMOTE_STAGING}/core ${AGI_REMOTE_DIR}/
   sudo cp ${REMOTE_STAGING}/asterisk/extensions.conf ${ASTERISK_CONF_DIR}/
   sudo cp ${REMOTE_STAGING}/asterisk/pjsip.conf ${ASTERISK_CONF_DIR}/
   if [ -d '${REMOTE_STAGING}/audio' ]; then

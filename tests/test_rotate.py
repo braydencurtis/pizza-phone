@@ -29,9 +29,11 @@ class TestRotate:
 
         from agi.rotate import main
 
-        with patch("sys.argv", ["rotate.py", "--mode", "roguelike", "--code", "9999", "--config", str(config_path)]):
-            with patch("agi.slack_notifier.urlopen"):
-                main()
+        with (
+            patch("sys.argv", ["rotate.py", "--mode", "roguelike", "--code", "9999", "--config", str(config_path)]),
+            patch("agi.slack_notifier.urlopen"),
+        ):
+            main()
 
     def test_rotate_no_webhook(self, tmp_path: Path) -> None:
         config_path = tmp_path / "mode.json"

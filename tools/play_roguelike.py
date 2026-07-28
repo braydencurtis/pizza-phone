@@ -2,9 +2,8 @@
 """Interactive CLI playground for roguelike mode."""
 
 import sys
-from typing import Literal
 
-from agi import mode_roguelike
+from core import mode_roguelike
 
 
 class CliContext:

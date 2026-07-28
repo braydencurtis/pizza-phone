@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agi import mode_puzzle, mode_tweeted
-from agi.headless import run_roguelike
-from agi.logger import CallSessionLogger
-from agi.types import Mode, Outcome
+from core import mode_puzzle, mode_tweeted
+from core.headless import run_roguelike
+from core.logger import CallSessionLogger
+from core.types import Mode, Outcome
 
 VALID_MODES: list[Mode] = ["tweeted", "puzzle", "roguelike"]
 

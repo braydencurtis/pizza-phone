@@ -67,6 +67,20 @@ def test_continue_in_dialplan_only_sends_provided_params() -> None:
     ]
 
 
+def test_set_channel_var_posts_variable_and_value() -> None:
+    async def run() -> _RecordingRequest:
+        client = _client()
+        req = _RecordingRequest()
+        client._request = req  # type: ignore[method-assign]
+        await client.set_channel_var("chan-1", "UPSTREAM_EXT", "6001")
+        return req
+
+    req = asyncio.run(run())
+    assert req.calls == [
+        ("POST", "/channels/chan-1/variable", {"variable": "UPSTREAM_EXT", "value": "6001"})
+    ]
+
+
 def test_hangup_deletes_channel() -> None:
     async def run() -> _RecordingRequest:
         client = _client()

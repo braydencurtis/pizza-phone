@@ -10,11 +10,31 @@ blocking AGI scripts. See ADR-0001 and epic #13.
   `aiohttp`, events via `websockets`. Subscribes to `StasisStart`,
   `ChannelDtmfReceived`, `StasisEnd`, `ChannelHangupRequest`, and
   `PlaybackFinished`; offers `answer` / `play` / `read_digits` (DTMF
-  accumulation) / `continue_in_dialplan` / `hangup`. Snoop/bridge/record
-  helpers are out of scope until Phases 2–3.
+  accumulation) / `set_channel_var` / `continue_in_dialplan` / `hangup`.
+  Snoop/bridge/record helpers are out of scope until Phases 2–3.
+- `ari_call_io.py` — `ARICallIO`: adapts the async `ARIClient` to the
+  synchronous `core.CallIO` protocol. This is where the sync→async shift is
+  absorbed (see below).
 
-The ARI→`core.CallIO` adapter (#18), the `CallSession` dispatch (#19), and the
-dashboard WS/HTTP server land in later Phase-1/Phase-2 issues.
+The `CallSession` dispatch (#19) and the dashboard WS/HTTP server land in later
+Phase-1/Phase-2 issues.
+
+## The ARI CallIO adapter
+
+`core.flow` is synchronous — it calls `play` / `read_dtmf` and blocks for the
+result — while ARI is asynchronous, delivering playback completion and DTMF as
+events on the engine's event loop. `ARICallIO` bridges the two: the engine runs
+each mode handler in a worker thread (`asyncio.to_thread`), and every `CallIO`
+method submits its ARI coroutine back to the loop with
+`asyncio.run_coroutine_threadsafe(...).result()`, blocking the worker thread
+until it resolves. The loop stays free to service events, so `play` unblocks on
+`PlaybackFinished` and `read_dtmf` on the collected digits — the same blocking
+shape the AGI verbs had. The mapping: `play`→`play`, `read_dtmf`→`read_digits`,
+`speak`→TTS synth then `play` (as a `sound:` URI), `hangup`→`hangup`,
+`to_success`→set `UPSTREAM_EXT` then `continue` into `pizza-success`.
+
+Because of the bridge these methods must be called from a thread other than the
+one running the loop; that is how the engine drives them.
 
 ## The ARI client
 

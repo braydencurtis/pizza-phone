@@ -104,7 +104,7 @@ adapter. Two await helpers absorb the event/command split the adapter needs:
   per channel, so nothing is lost if they arrive before the read.
 
 ```python
-async with ARIClient("http://pbx:8088", user, secret, "pizza") as ari:
+async with ARIClient("http://pbx:8088", user, secret, "pizza-phone") as ari:
     ari.on(STASIS_START, on_call)          # register/answer new calls
     await ari.answer(channel_id)
     await ari.play(channel_id, "sound:riddle")

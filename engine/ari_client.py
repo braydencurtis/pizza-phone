@@ -54,7 +54,7 @@ class ARIClient:
 
     Typical use::
 
-        async with ARIClient("http://pbx:8088", "user", "secret", "pizza") as ari:
+        async with ARIClient("http://pbx:8088", "user", "secret", "pizza-phone") as ari:
             ari.on(STASIS_START, on_call)
             await ari.answer(channel_id)
             await ari.play(channel_id, "sound:hello")

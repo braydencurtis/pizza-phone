@@ -11,7 +11,7 @@ Environment:
 - ``ARI_BASE_URL``   Asterisk ARI base URL (default ``http://localhost:8088``)
 - ``ARI_USERNAME``   ARI user (default ``pizza``)
 - ``ARI_PASSWORD``   ARI password (default ``pizza``)
-- ``ARI_APP``        Stasis application name (default ``pizza``)
+- ``ARI_APP``        Stasis application name (default ``pizza-phone``)
 - ``PIZZA_DB_PATH``  SQLite call-history file (default ``<repo>/data/calls.db``)
 """
 
@@ -35,7 +35,7 @@ def _build_engine() -> tuple[CallEngine, ARIClient]:
         base_url=os.environ.get("ARI_BASE_URL", "http://localhost:8088"),
         username=os.environ.get("ARI_USERNAME", "pizza"),
         password=os.environ.get("ARI_PASSWORD", "pizza"),
-        app=os.environ.get("ARI_APP", "pizza"),
+        app=os.environ.get("ARI_APP", "pizza-phone"),
     )
     db_path = Path(os.environ.get("PIZZA_DB_PATH", str(base / "data" / "calls.db")))
     store = CallStore(db_path)

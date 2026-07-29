@@ -13,7 +13,7 @@ class TestRotate:
         config_path = tmp_path / "mode.json"
         config_path.write_text(json.dumps({"mode": "tweeted", "code": "0000", "attempt_limit": 3}))
 
-        from agi.rotate import main
+        from tools.rotate import main
 
         with patch("sys.argv", ["rotate.py", "--mode", "puzzle", "--code", "4242", "--config", str(config_path)]):
             main()
@@ -27,11 +27,11 @@ class TestRotate:
         config_path = tmp_path / "mode.json"
         config_path.write_text(json.dumps({"mode": "tweeted", "code": "0000"}))
 
-        from agi.rotate import main
+        from tools.rotate import main
 
         with (
             patch("sys.argv", ["rotate.py", "--mode", "roguelike", "--code", "9999", "--config", str(config_path)]),
-            patch("agi.slack_notifier.urlopen"),
+            patch("tools.slack_notifier.urlopen"),
         ):
             main()
 
@@ -39,7 +39,7 @@ class TestRotate:
         config_path = tmp_path / "mode.json"
         config_path.write_text(json.dumps({"mode": "tweeted", "code": "0000"}))
 
-        from agi.rotate import main
+        from tools.rotate import main
 
         with (
             patch("sys.argv", ["rotate.py", "--mode", "puzzle", "--code", "1234", "--config", str(config_path)]),
@@ -55,7 +55,7 @@ class TestRotate:
         config_path = tmp_path / "mode.json"
         config_path.write_text(json.dumps({"mode": "tweeted", "code": "0000"}))
 
-        from agi.rotate import main
+        from tools.rotate import main
 
         with (
             patch("sys.argv", ["rotate.py", "--mode", "invalid", "--code", "1234", "--config", str(config_path)]),

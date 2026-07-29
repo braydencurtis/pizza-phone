@@ -62,9 +62,11 @@ and answers, and a successful code rings the Upstairs Phone via
 `[pizza-success]`. This is the #15 DoD — a Stasis app receives the inbound
 channel and the success path still Dials upstairs.
 
-## Cutover / rollback
+## Cutover
 
-The AGI -> Stasis switch is one line in `[from-pots]`
-(`AGI(...)` -> `Stasis(pizza-phone)`). To fall back to the AGI path, restore that
-line and `dialplan reload`; `agi/` stays in the tree until the ARI path is
-proven and issue #20 retires it.
+`[from-pots]` hands the call straight to `Stasis(pizza-phone)`. The AGI driver
+that preceded it was retired in Phase 1 (issue #20) once the ARI path was proven
+on the office rig, so there is no AGI fallback line to restore. If the engine is
+down, inbound channels fall through Stasis to the trailing `Hangup()` — start
+`python -m engine` and `dialplan reload` is not needed (the dialplan already
+routes to Stasis).

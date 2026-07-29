@@ -1,8 +1,11 @@
 # Scripts
 
-Utility scripts for operations and maintenance.
+Ops scripts for deploying and maintaining the PBX.
 
 ## Key Scripts
 
-- `rotate.sh` — Generate a new daily code and push it to Slack
-- `status.sh` — Display current mode, code, and recent call log summary
+- `deploy.sh` — Push the Asterisk configs (dialplan, PJSIP, HTTP, ARI) to the
+  Mac Mini PBX. See the header in the script for scope and usage.
+
+Code rotation moved to the `tools/` CLI — see [`tools/`](../tools/). The operator
+console will absorb rotation in Phase 2 (Eyes).

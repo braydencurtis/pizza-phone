@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from engine.ari_client import STASIS_START, EventHandler
-from engine.call_engine import CallEngine
+from engine.call_engine import EXILE_MEDIA, WRONG_MEDIA, CallEngine
 from engine.call_store import CallStore
 
 
@@ -116,6 +116,13 @@ async def _engine(tmp_path: Path, ari: FakeARI, **config: Any) -> tuple[CallEngi
     return engine, store
 
 
+def _seed_puzzle_pool(tmp_path: Path) -> None:
+    """Drop one placeholder puzzle WAV where the engine's PuzzleSelector looks."""
+    pool = tmp_path / "audio" / "puzzles"
+    pool.mkdir(parents=True)
+    (pool / "riddle-001.wav").write_bytes(b"RIFF")
+
+
 # -- DoD: all three modes complete end-to-end on the engine -------------------
 
 
@@ -140,9 +147,7 @@ def test_tweeted_call_runs_and_persists(tmp_path: Path) -> None:
 
 def test_puzzle_call_runs_and_persists(tmp_path: Path) -> None:
     async def run() -> Any:
-        pool = tmp_path / "audio" / "puzzles"
-        pool.mkdir(parents=True)
-        (pool / "riddle-001.wav").write_bytes(b"RIFF")
+        _seed_puzzle_pool(tmp_path)
         ari = FakeARI(dtmf=["4242"])
         engine, store = await _engine(tmp_path, ari, mode="puzzle", code="4242", attempt_limit=3)
         await ari.fire_stasis_start("chan-1")
@@ -171,6 +176,93 @@ def test_roguelike_call_runs_and_persists(tmp_path: Path) -> None:
     assert records[0].mode == "roguelike"
     # The call ran to a terminal outcome, not just started.
     assert records[0].outcome in {"succeed", "fail"}
+
+
+# -- parity: the ARI seam reproduces AGI behaviour across every outcome -------
+#
+# The DoD tests above cover the happy path per mode. These drive the same modes
+# through wrong-then-right and all-wrong sequences — the paths the retired AGI
+# driver was exercised on (tests/test_flow.py) — but end-to-end through the
+# engine and ARICallIO, so deleting agi/ can't silently drop coverage of the
+# wrong-answer beep, the Exile prompt, or the attempt limit on the ARI path.
+
+
+def test_tweeted_wrong_then_right_succeeds(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = FakeARI(dtmf=["0000", "1234"])
+        engine, store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return store, ari
+
+    store, ari = asyncio.run(run())
+    records = asyncio.run(store.query())
+    assert len(records) == 1
+    assert records[0].outcome == "succeed"
+    assert records[0].attempts == 2
+    # One wrong answer beeps once; success routes onto the dialplan, no hangup.
+    assert ari.calls.count(("play", "chan-1", WRONG_MEDIA)) == 1
+    assert any(c[0] == "continue" for c in ari.calls)
+    assert ("hangup", "chan-1") not in ari.calls
+
+
+def test_tweeted_all_wrong_exiles(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = FakeARI(dtmf=["0000", "0000", "0000"])
+        engine, store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return store, ari
+
+    store, ari = asyncio.run(run())
+    records = asyncio.run(store.query())
+    assert len(records) == 1
+    assert records[0].outcome == "exile"
+    assert records[0].attempts == 3
+    # Two beeps (attempts 1-2), then the Exile prompt, then hang up.
+    assert ari.calls.count(("play", "chan-1", WRONG_MEDIA)) == 2
+    assert ("play", "chan-1", EXILE_MEDIA) in ari.calls
+    assert ("hangup", "chan-1") in ari.calls
+    assert not any(c[0] == "continue" for c in ari.calls)
+
+
+def test_puzzle_wrong_then_right_succeeds(tmp_path: Path) -> None:
+    async def run() -> Any:
+        _seed_puzzle_pool(tmp_path)
+        ari = FakeARI(dtmf=["0000", "4242"])
+        engine, store = await _engine(tmp_path, ari, mode="puzzle", code="4242", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return store, ari
+
+    store, ari = asyncio.run(run())
+    records = asyncio.run(store.query())
+    assert len(records) == 1
+    assert records[0].outcome == "succeed"
+    assert records[0].attempts == 2
+    assert records[0].detail == {"puzzle_id": "riddle-001.wav"}
+    # The riddle prompt plays before answers; one wrong answer beeps once.
+    assert ari.calls.count(("play", "chan-1", WRONG_MEDIA)) == 1
+    assert any(c[0] == "continue" for c in ari.calls)
+
+
+def test_puzzle_all_wrong_exiles(tmp_path: Path) -> None:
+    async def run() -> Any:
+        _seed_puzzle_pool(tmp_path)
+        ari = FakeARI(dtmf=["0000", "1111", "2222"])
+        engine, store = await _engine(tmp_path, ari, mode="puzzle", code="4242", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return store, ari
+
+    store, ari = asyncio.run(run())
+    records = asyncio.run(store.query())
+    assert len(records) == 1
+    assert records[0].outcome == "exile"
+    assert records[0].attempts == 3
+    assert ari.calls.count(("play", "chan-1", WRONG_MEDIA)) == 2
+    assert ("play", "chan-1", EXILE_MEDIA) in ari.calls
+    assert ("hangup", "chan-1") in ari.calls
 
 
 # -- skeleton behaviours ------------------------------------------------------

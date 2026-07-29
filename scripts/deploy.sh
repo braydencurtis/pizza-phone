@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy pizza-phone AGI scripts and Asterisk configs to a Debian Mac Mini.
+# Deploy the pizza-phone Asterisk configs to the Debian Mac Mini PBX.
 #
 # Usage:
 #   scripts/deploy.sh <mac-mini-ip> [--restart] [--install-tts]
 #
 # Requires SSH access for foodbeast@<mac-mini-ip> with sudo privileges.
+#
+# Scope: this pushes the Asterisk dialplan/PJSIP/HTTP/ARI configs to
+# /etc/asterisk. The Call Engine itself (python -m engine) and the game logic in
+# core/ run from a git checkout on the host under a systemd service — deploying
+# and restarting that is out of this script's scope. The old AGI driver (agi/)
+# was retired in Phase 1 (#20); nothing is installed into /var/lib/asterisk/agi
+# anymore.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -30,10 +37,9 @@ for arg in "$@"; do
 done
 
 REMOTE_USER="${REMOTE_USER:-foodbeast}"
-AGI_REMOTE_DIR="/var/lib/asterisk/agi"
 ASTERISK_CONF_DIR="/etc/asterisk"
 
-echo "==> Deploying to ${REMOTE_USER}@${TARGET}"
+echo "==> Deploying Asterisk configs to ${REMOTE_USER}@${TARGET}"
 
 # SSH helper with TTY allocation so sudo can prompt for password
 ssh_cmd() {
@@ -45,52 +51,30 @@ REMOTE_HOME="$(ssh "${REMOTE_USER}@${TARGET}" 'echo ~')"
 REMOTE_STAGING="${REMOTE_HOME}/pizza-phone-staging"
 
 # Ensure staging directory exists
-ssh "${REMOTE_USER}@${TARGET}" "mkdir -p ${REMOTE_STAGING}"
+ssh "${REMOTE_USER}@${TARGET}" "mkdir -p ${REMOTE_STAGING}/asterisk"
 
-# Deploy AGI scripts to user-writable staging dir (no sudo needed)
-echo "==> Syncing agi/ -> remote staging"
-rsync -avz --delete \
-  --exclude '__pycache__' \
-  --exclude '*.pyc' \
-  "${ROOT_DIR}/agi/" \
-  "${REMOTE_USER}@${TARGET}:${REMOTE_STAGING}/agi/"
-
-# Deploy channel-agnostic game logic (imported by agi/main.py)
-echo "==> Syncing core/ -> remote staging"
-rsync -avz --delete \
-  --exclude '__pycache__' \
-  --exclude '*.pyc' \
-  "${ROOT_DIR}/core/" \
-  "${REMOTE_USER}@${TARGET}:${REMOTE_STAGING}/core/"
-
-# Deploy Asterisk dialplan configs
+# Deploy Asterisk configs to a user-writable staging dir (no sudo needed).
+# All four are needed for the ARI cutover: http.conf brings up the transport,
+# ari.conf enables ARI + the engine's user, extensions.conf routes to Stasis,
+# pjsip.conf defines the endpoints.
 echo "==> Syncing asterisk configs -> remote staging"
 rsync -avz \
   "${ROOT_DIR}/asterisk/extensions.conf" \
   "${ROOT_DIR}/asterisk/pjsip.conf" \
+  "${ROOT_DIR}/asterisk/http.conf" \
+  "${ROOT_DIR}/asterisk/ari.conf" \
   "${REMOTE_USER}@${TARGET}:${REMOTE_STAGING}/asterisk/"
 
-# Deploy audio files
-if [[ -d "${ROOT_DIR}/audio" ]]; then
-  echo "==> Syncing audio/ -> remote staging"
-  rsync -avz \
-    "${ROOT_DIR}/audio/" \
-    "${REMOTE_USER}@${TARGET}:${REMOTE_STAGING}/audio/"
-fi
-
-# Now move staged files to system directories with a single sudo call
-echo "==> Installing files (sudo required)..."
+# Move staged files into /etc/asterisk with a single sudo call
+echo "==> Installing configs (sudo required)..."
 ssh_cmd "
   set -e
-  sudo mkdir -p ${AGI_REMOTE_DIR} ${ASTERISK_CONF_DIR}
-  sudo rm -rf ${AGI_REMOTE_DIR}/agi && sudo cp -r ${REMOTE_STAGING}/agi ${AGI_REMOTE_DIR}/
-  sudo rm -rf ${AGI_REMOTE_DIR}/core && sudo cp -r ${REMOTE_STAGING}/core ${AGI_REMOTE_DIR}/
+  sudo mkdir -p ${ASTERISK_CONF_DIR}
   sudo cp ${REMOTE_STAGING}/asterisk/extensions.conf ${ASTERISK_CONF_DIR}/
   sudo cp ${REMOTE_STAGING}/asterisk/pjsip.conf ${ASTERISK_CONF_DIR}/
-  if [ -d '${REMOTE_STAGING}/audio' ]; then
-    sudo cp -r ${REMOTE_STAGING}/audio ${AGI_REMOTE_DIR}/
-  fi
-  echo 'Files installed successfully'
+  sudo cp ${REMOTE_STAGING}/asterisk/http.conf ${ASTERISK_CONF_DIR}/
+  sudo cp ${REMOTE_STAGING}/asterisk/ari.conf ${ASTERISK_CONF_DIR}/
+  echo 'Configs installed successfully'
 "
 
 # Install TTS backend if requested
@@ -99,10 +83,16 @@ if [[ "$INSTALL_TTS" == true ]]; then
   ssh_cmd "sudo apt-get update && sudo apt-get install -y espeak"
 fi
 
-# Restart Asterisk if requested
+# Reload Asterisk if requested. HTTP before ARI (ARI rides on it); the engine
+# must be running before the dialplan starts routing to Stasis(pizza-phone).
 if [[ "$RESTART" == true ]]; then
   echo "==> Reloading Asterisk..."
-  ssh_cmd "sudo asterisk -rx 'module reload'"
+  ssh_cmd "
+    sudo asterisk -rx 'module reload http'
+    sudo asterisk -rx 'module reload res_ari'
+    sudo asterisk -rx 'pjsip reload'
+    sudo asterisk -rx 'dialplan reload'
+  "
   echo "==> Asterisk reloaded"
 fi
 

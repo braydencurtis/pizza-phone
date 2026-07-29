@@ -77,7 +77,7 @@ class ARICallIO:
         if self._tts is None:
             self._tts = detect_backend()()
         audio_path = synthesize(text, backend=self._tts, output_dir=self._output_dir)
-        self._run_on_loop(self._ari.play(self._channel_id, self._sound_uri(audio_path)))
+        self._run_on_loop(self._ari.play(self._channel_id, sound_uri(audio_path)))
 
     def hangup(self) -> None:
         self._run_on_loop(self._ari.hangup(self._channel_id))
@@ -106,7 +106,11 @@ class ARICallIO:
         """
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
-    @staticmethod
-    def _sound_uri(audio_path: Path) -> str:
-        """A ``sound:`` URI for a synthesized file (Asterisk wants no extension)."""
-        return f"sound:{audio_path.with_suffix('')}"
+
+def sound_uri(audio_path: Path) -> str:
+    """An ARI ``sound:`` URI for a WAV path (Asterisk wants no extension).
+
+    Shared by the adapter's ``speak`` and the engine's puzzle-prompt dispatch —
+    both name a local WAV to Asterisk the same way.
+    """
+    return f"sound:{audio_path.with_suffix('')}"

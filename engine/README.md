@@ -20,9 +20,39 @@ blocking AGI scripts. See ADR-0001 and epic #13.
   a single-file `calls` table, queryable by mode/outcome/date. Stdlib `sqlite3`
   run off the event loop via `asyncio.to_thread` (see below). The `recording_*`
   columns hold WAV paths and stay empty until Phase 3.
+- `call_session.py` — `CallSession`: the engine's live in-memory state for the
+  single active call. Carries the call's identity from `StasisStart`, is filled
+  in with the terminal outcome, and flattens into a `CallRecord`.
+- `call_engine.py` — `CallEngine`: the Phase 1 skeleton. Owns the ARI event
+  loop; on each `StasisStart` runs one Call Session end-to-end and persists it.
+- `__main__.py` — `python -m engine`: the dev/office run. Wires the engine from
+  the environment (ARI connection) and the repo layout, then runs until Ctrl-C.
 
-The `CallSession` dispatch that writes to the store (#19) and the dashboard
-WS/HTTP server that reads from it (Phase 2) land in later issues.
+## The engine skeleton
+
+`CallEngine` (#19) is the single asyncio process that owns live calls. On each
+`StasisStart` it answers the channel, loads config, and dispatches to the
+configured mode's `core.flow` handler (tweeted / puzzle / roguelike) through the
+`ARICallIO` seam — the same handlers, unchanged, that the retired AGI driver
+ran. On the terminal outcome the flow routes the caller (success → the
+`pizza-success` context; otherwise hangup), and the engine persists the
+completed `CallSession` to the `CallStore`.
+
+**One call at a time.** The booth has a single phone, so the engine holds one
+`active_session`; a second `StasisStart` while a call is live is hung up rather
+than queued.
+
+**The handler stays non-blocking.** `ARIClient` dispatches event handlers inline
+on its WebSocket reader task, so `StasisStart` handling must return promptly —
+otherwise the reader could never deliver the DTMF and `PlaybackFinished` events
+the call itself depends on. The handler therefore only claims the slot and
+spawns a background task; that task runs the synchronous `core.flow` handler in
+a worker thread (`asyncio.to_thread`) while the loop stays free to service
+events — exactly the bridge `ARICallIO` is built around.
+
+**Phase 2 seam.** `active_session` is the shared in-memory state: the dashboard
+WS/HTTP server slots into this same process and reads it directly to render the
+live call. Persistence and the read side share one process, one in-memory state.
 
 ## The call-history store
 

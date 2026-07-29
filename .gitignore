@@ -3,6 +3,10 @@ logs/*.json
 logs/*.jsonl
 logs/*.log
 
+# Call-history database (engine dev/office runs)
+data/
+*.db
+
 # Python
 __pycache__/
 *.py[cod]

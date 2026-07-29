@@ -43,7 +43,7 @@
 | Backend language | Python (async / asyncio), driving calls via ARI/Stasis — not AGI |
 | Anti-cheese strategy | Defer — trust the experience as deterrent. Physical gatekeeper if needed. |
 | Config management | Web dashboard for operator to monitor calls, switch modes, rotate codes |
-| Codebase structure | `core/` (channel-agnostic game logic, extracted from `agi/`), `engine/` (single asyncio process = ARI app + dashboard WS/HTTP server), `web/` (React + Vite frontend). `agi/` retired once ARI proves out. |
+| Codebase structure | `core/` (channel-agnostic game logic, extracted from the old `agi/`), `engine/` (single asyncio process = ARI app + dashboard WS/HTTP server), `web/` (React + Vite frontend), `tools/` (operator/dev CLIs — code rotation, roguelike playground). `agi/` retired in Phase 1 once ARI proved out (#20); the code-rotation CLI moved to `tools/`. |
 | Web dashboard auth | Single shared password (one line in config), gating both the HTTP load and the WebSocket upgrade. LAN-only, plain HTTP — mostly runs on the office network. Tailscale added later if remote access is ever needed; never a public port. |
 | Web dashboard deployment | Systemd service, specific port |
 | Real-time communication | WebSockets bidirectional between frontend and backend |

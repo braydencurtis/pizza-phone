@@ -1,8 +1,8 @@
 """Channel-agnostic interactive call flow.
 
 Each ``run_*`` function drives one Call Session for a mode, talking to the
-caller only through a :class:`~core.call_io.CallIO`. The same functions back
-both the AGI entry point and the ARI Call Engine; the driver differs, the game
+caller only through a :class:`~core.call_io.CallIO`. The same functions backed
+the AGI entry point and now the ARI Call Engine; the driver differs, the game
 logic does not.
 
 Media identifiers (``prompt_media``, ``exile_media``, ``wrong_media``) are

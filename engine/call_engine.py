@@ -169,8 +169,8 @@ class CallEngine:
         """Load config and run the configured mode's ``core.flow`` handler.
 
         Runs off the event loop (worker thread) because ``core.flow`` is
-        blocking and every ``ARICallIO`` call hops back to the loop. Mirrors
-        ``agi/main.py``'s dispatch — same handlers, ARI media names.
+        blocking and every ``ARICallIO`` call hops back to the loop. Same
+        per-mode dispatch the retired AGI entry point ran, with ARI media names.
         """
         assert self._loop is not None  # set in start(), before any call runs
         router = Router(config_dir=self._config_dir, log_dir=self._log_dir)
@@ -210,7 +210,7 @@ class CallEngine:
         """Pick a puzzle from the pool and run the puzzle flow.
 
         Selection is core; resolving the chosen WAV to an ARI ``sound:`` URI is
-        engine-specific, so it stays here (mirrors ``agi/main.py``).
+        engine-specific, so it stays here.
         """
         puzzle_path = PuzzleSelector(self._audio_dir / "puzzles").pick()
         return flow.run_puzzle(

@@ -1,8 +1,9 @@
 # core
 
-Channel-agnostic game logic. `core/` never imports a channel driver (AGI, ARI);
-it reaches the outside world only through the `CallIO` protocol, so the same
-logic runs under the AGI scripts today and the ARI Call Engine next (epic #13).
+Channel-agnostic game logic. `core/` never imports a channel driver (ARI, or the
+retired AGI scripts); it reaches the outside world only through the `CallIO`
+protocol. That seam is what let the same logic run under the AGI scripts and now
+the ARI Call Engine (epic #13) — the driver changed, this code did not.
 
 ## Modules
 

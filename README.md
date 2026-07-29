@@ -15,10 +15,12 @@ A backrooms-themed phone booth experience. Callers solve puzzles to earn a 4-dig
 | Directory | Purpose |
 |-----------|---------|
 | `asterisk/` | Dialplan configs, SIP registrations, PBX settings |
-| `agi/` | Python AGI scripts for interactive call logic |
+| `core/` | Channel-agnostic game logic (modes, router, TTS) behind the `CallIO` seam |
+| `engine/` | The ARI Call Engine — one asyncio process that owns live calls via ARI/Stasis |
 | `config/` | Runtime config (mode, code, feature flags) |
 | `logs/` | Call session logs (JSON lines, gitignored) |
-| `scripts/` | Utility scripts (code rotation, status) |
+| `tools/` | Operator/dev CLIs (code rotation + Slack notice, roguelike playground) |
+| `scripts/` | Ops scripts (deploy, status) |
 
 ## Modes
 

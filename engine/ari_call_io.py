@@ -1,6 +1,6 @@
 """Adapts the async :class:`~engine.ari_client.ARIClient` to the synchronous
-``core.CallIO`` protocol — the ARI half of the seam ``AGICallIO`` fills for AGI.
-This is where the sync→async shift is absorbed.
+``core.CallIO`` protocol — the ARI implementation of the seam the retired AGI
+driver filled for AGI. This is where the sync→async shift is absorbed.
 
 The bridge: ``core.flow`` is synchronous, ARI is event-driven, so the engine
 runs each mode handler in a worker thread and every method here submits its ARI
@@ -36,8 +36,8 @@ T = TypeVar("T")
 class ARICallIO:
     """``CallIO`` backed by ARI, bridging the sync flow to the async client.
 
-    Parameters mirror ``AGICallIO`` where they overlap. ``loop`` is the engine's
-    running event loop; ``channel_id`` scopes every command to this one call.
+    ``loop`` is the engine's running event loop; ``channel_id`` scopes every
+    command to this one call.
     ``tts``/``output_dir`` follow ``core.tts`` defaults (auto-detected backend,
     ``/tmp`` output) when omitted.
     """

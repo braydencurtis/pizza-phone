@@ -30,6 +30,13 @@ SUCCESS_CONTEXT = "pizza-success"
 SUCCESS_EXTENSION = "s"
 SUCCESS_PRIORITY = 1
 
+# Upper bound on how long play() waits for PlaybackFinished before giving up and
+# letting the flow continue. Comfortably longer than any real prompt; it exists
+# only as a backstop so a lost PlaybackFinished (e.g. a caller who hangs up
+# mid-prompt) can't wedge the call — and with it the single-call engine —
+# forever. The client logs and returns on timeout rather than raising.
+DEFAULT_PLAY_TIMEOUT_S = 120.0
+
 T = TypeVar("T")
 
 
@@ -51,6 +58,7 @@ class ARICallIO:
         *,
         tts: TTSBackend | None = None,
         output_dir: Path | None = None,
+        play_timeout_s: float = DEFAULT_PLAY_TIMEOUT_S,
     ) -> None:
         self._ari = ari
         self._channel_id = channel_id
@@ -58,9 +66,10 @@ class ARICallIO:
         self._upstream_ext = upstream_ext
         self._tts = tts
         self._output_dir = output_dir
+        self._play_timeout_s = play_timeout_s
 
     def play(self, media: str) -> None:
-        self._run_on_loop(self._ari.play(self._channel_id, media))
+        self._run_on_loop(self._ari.play(self._channel_id, media, timeout=self._play_timeout_s))
 
     def read_dtmf(self, num_digits: int, timeout_ms: int) -> str:
         return self._run_on_loop(
@@ -77,7 +86,9 @@ class ARICallIO:
         if self._tts is None:
             self._tts = detect_backend()()
         audio_path = synthesize(text, backend=self._tts, output_dir=self._output_dir)
-        self._run_on_loop(self._ari.play(self._channel_id, sound_uri(audio_path)))
+        self._run_on_loop(
+            self._ari.play(self._channel_id, sound_uri(audio_path), timeout=self._play_timeout_s)
+        )
 
     def hangup(self) -> None:
         self._run_on_loop(self._ari.hangup(self._channel_id))

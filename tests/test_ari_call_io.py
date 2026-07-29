@@ -85,6 +85,23 @@ def test_play_maps_to_ari_play() -> None:
     assert asyncio.run(run()) == [("play", "chan-1", "sound:riddle")]
 
 
+def test_play_passes_the_configured_timeout_to_ari() -> None:
+    async def run() -> float | None:
+        seen: dict[str, float | None] = {}
+
+        class TimeoutARI(FakeARI):
+            async def play(self, channel_id: str, media: str, *, timeout: float | None = None) -> None:
+                seen["timeout"] = timeout
+
+        io = _io(TimeoutARI(), asyncio.get_running_loop(), play_timeout_s=12.5)
+        await asyncio.to_thread(io.play, "sound:x")
+        return seen["timeout"]
+
+    # The adapter must hand its bound down so a lost PlaybackFinished can't wedge
+    # the call (see ARICallIO.DEFAULT_PLAY_TIMEOUT_S).
+    assert asyncio.run(run()) == 12.5
+
+
 def test_read_dtmf_returns_collected_digits() -> None:
     async def run() -> tuple[str, list[tuple[Any, ...]]]:
         ari = FakeARI(dtmf=["1234"])

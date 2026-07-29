@@ -45,6 +45,13 @@ CHANNEL_DTMF_RECEIVED = "ChannelDtmfReceived"
 CHANNEL_HANGUP_REQUEST = "ChannelHangupRequest"
 PLAYBACK_FINISHED = "PlaybackFinished"
 
+# Event-WebSocket reconnect backoff. A dropped socket (Asterisk restart, network
+# blip) otherwise leaves the engine alive but deaf — and, since the process
+# stays up, a systemd Restart= wouldn't fire — so the reader reconnects with
+# capped exponential backoff instead of exiting on the first close.
+RECONNECT_BASE_S = 1.0
+RECONNECT_MAX_S = 30.0
+
 # An event handler receives the raw event dict; it may be sync or async.
 EventHandler = Callable[[dict[str, Any]], Awaitable[None] | None]
 
@@ -147,6 +154,16 @@ class ARIClient:
         event = self._playback_finished.setdefault(playback_id, asyncio.Event())
         try:
             await asyncio.wait_for(event.wait(), timeout)
+        except TimeoutError:
+            # PlaybackFinished never arrived within the bound. Give up waiting
+            # and let the flow continue rather than blocking the call forever —
+            # mirrors read_digits returning partial input on its timeout.
+            logger.warning(
+                "Playback %s on %s did not finish within %ss; continuing",
+                playback_id,
+                channel_id,
+                timeout,
+            )
         finally:
             self._playback_finished.pop(playback_id, None)
 
@@ -217,13 +234,36 @@ class ARIClient:
             return None
 
     async def _reader(self) -> None:
-        assert self._ws is not None
-        try:
-            async for message in self._ws:
-                text = message.decode() if isinstance(message, bytes) else message
-                await self._handle_message(text)
-        except ConnectionClosed:
-            logger.info("ARI websocket closed")
+        """Read events off the WebSocket, reconnecting if it drops.
+
+        The ``async for`` blocks here for the life of the connection. Falling
+        out of it (a close or a ``ConnectionClosed``) means the socket dropped —
+        :meth:`close` cancels this task, so an intentional shutdown never reaches
+        the reconnect path. On a drop we reconnect with capped backoff so an
+        Asterisk restart doesn't leave the engine permanently deaf.
+        """
+        backoff = RECONNECT_BASE_S
+        while True:
+            try:
+                assert self._ws is not None
+                async for message in self._ws:
+                    text = message.decode() if isinstance(message, bytes) else message
+                    await self._handle_message(text)
+            except ConnectionClosed:
+                logger.info("ARI websocket closed")
+
+            logger.warning("ARI websocket dropped; reconnecting in %ss", backoff)
+            try:
+                await asyncio.sleep(backoff)
+                self._ws = await ws_connect(self._ws_url())
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("ARI reconnect attempt failed")
+                backoff = min(backoff * 2, RECONNECT_MAX_S)
+                continue
+            logger.info("ARI websocket reconnected")
+            backoff = RECONNECT_BASE_S
 
     async def _handle_message(self, message: str) -> None:
         try:

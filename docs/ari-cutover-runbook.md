@@ -131,9 +131,11 @@ the Booth Phone. Watch the engine's tmux pane for `StasisStart` and the
 
 - [ ] **Hang up mid-prompt.** During the puzzle riddle or a roguelike prompt,
       hang up the Booth Phone. Confirm the engine logs the session ending and
-      returns to idle (`active_session` cleared) — i.e. the call slot frees. If
-      the pane goes quiet and a *new* call is answered but never runs, the engine
-      is stuck waiting on a playback that never finished (see Review finding #2).
+      returns to idle (`active_session` cleared) — i.e. the call slot frees. A
+      lost `PlaybackFinished` no longer wedges the call forever: `play()` now
+      backstops at `DEFAULT_PLAY_TIMEOUT_S` (120s) and continues. If you ever see
+      a ~120s stall on a dead call, that backstop fired — expected, but tells you
+      Asterisk didn't emit `PlaybackFinished` on hangup.
 - [ ] **Second concurrent call.** With one call live, pick up… well, there's one
       Booth Phone, so simulate if you can (a second SIP channel into `from-pots`).
       Expected: the second channel is hung up immediately, the first is unaffected.
@@ -156,8 +158,11 @@ the Booth Phone. Watch the engine's tmux pane for `StasisStart` and the
   don't, it's the absolute-path/permission issue).
 - **Upstairs never rings on success** → check `[pizza-success]` Dial and that
   `PJSIP/200` (the Yealink) is registered: `sudo asterisk -rx "pjsip show endpoints"`.
-- **WS drops / Asterisk restarted mid-session** → the engine does **not**
-  auto-reconnect (Review finding #3). Restart `python -m engine`.
+- **WS drops / Asterisk restarted mid-session** → the engine now auto-reconnects
+  the event socket with capped backoff (up to 30s), so it should recover on its
+  own — watch for `ARI websocket reconnected` in the pane. Any call that was live
+  at the moment of the drop is lost (its channel died with Asterisk); the next
+  call starts clean.
 
 ---
 

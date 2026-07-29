@@ -131,6 +131,20 @@ def test_play_resolves_even_if_finished_arrives_before_the_wait() -> None:
     asyncio.run(run())
 
 
+def test_play_gives_up_and_returns_when_finished_never_arrives() -> None:
+    # A lost PlaybackFinished (e.g. caller hangs up mid-prompt) must not wedge
+    # the call: play() returns on its timeout rather than raising or blocking.
+    async def run() -> None:
+        client = _client()
+        req = _RecordingRequest(body={"id": "pb-stuck"})
+        client._request = req  # type: ignore[method-assign]
+        await asyncio.wait_for(client.play("chan-1", "sound:x", timeout=0.02), timeout=1)
+        # The pending-playback flag is cleaned up even on the timeout path.
+        assert client._playback_finished == {}
+
+    asyncio.run(run())
+
+
 # -- DTMF accumulation ---------------------------------------------------------
 
 
@@ -304,3 +318,64 @@ def test_ws_url_carries_app_and_credentials() -> None:
 def test_ws_url_uses_wss_for_https_base() -> None:
     client = ARIClient("https://pbx:8089", "u", "p", "pizza")
     assert client._ws_url().startswith("wss://pbx:8089/ari/events?")
+
+
+# -- reconnect -----------------------------------------------------------------
+
+
+class _FakeWS:
+    """A minimal event socket: yields its scripted messages, then either blocks
+    open (``block=True``) or 'closes' by ending iteration."""
+
+    def __init__(self, messages: list[str], *, block: bool = False) -> None:
+        self._messages = messages
+        self._block = block
+        self.closed = False
+
+    def __aiter__(self) -> Any:
+        return self._iter()
+
+    async def _iter(self) -> Any:
+        for message in self._messages:
+            yield message
+        if self._block:
+            await asyncio.Event().wait()  # stay open until cancelled
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_reader_reconnects_after_the_socket_drops(monkeypatch: Any) -> None:
+    """A dropped socket doesn't end the reader: it reconnects and keeps
+    delivering events (here, the StasisStart that arrives on the second
+    connection)."""
+
+    async def run() -> list[str]:
+        client = _client()
+        seen: list[str] = []
+        client.on(STASIS_START, lambda event: seen.append(event["channel"]["id"]))
+
+        # First socket delivers chan-1 then ends (drop); the reconnect returns a
+        # socket that delivers chan-2 then stays open so the reader parks.
+        ws1 = _FakeWS([json.dumps({"type": STASIS_START, "channel": {"id": "chan-1"}})])
+        ws2 = _FakeWS(
+            [json.dumps({"type": STASIS_START, "channel": {"id": "chan-2"}})], block=True
+        )
+        reconnects = iter([ws2])
+
+        async def fake_connect(_url: str) -> _FakeWS:
+            return next(reconnects)
+
+        monkeypatch.setattr("engine.ari_client.ws_connect", fake_connect)
+        monkeypatch.setattr("engine.ari_client.RECONNECT_BASE_S", 0.01)
+
+        client._ws = ws1  # type: ignore[assignment]  # structural stand-in for ClientConnection
+        client._reader_task = asyncio.create_task(client._reader())
+        for _ in range(200):
+            if seen == ["chan-1", "chan-2"]:
+                break
+            await asyncio.sleep(0.01)
+        await client.close()
+        return seen
+
+    assert asyncio.run(run()) == ["chan-1", "chan-2"]

@@ -25,8 +25,13 @@ blocking AGI scripts. See ADR-0001 and epic #13.
   in with the terminal outcome, and flattens into a `CallRecord`.
 - `call_engine.py` — `CallEngine`: the Phase 1 skeleton. Owns the ARI event
   loop; on each `StasisStart` runs one Call Session end-to-end and persists it.
+- `fake_pbx.py` — the **Fake PBX**: a scripted stand-in for Asterisk that fires
+  synthetic Call Sessions at the real engine. Development only (see below).
+- `fake_audio.py` — the Fake PBX's media path: synthetic 8 kHz slin frames for a
+  Listen-in consumer, plus the WAV tee. Development only.
 - `__main__.py` — `python -m engine`: the dev/office run. Wires the engine from
   the environment (ARI connection) and the repo layout, then runs until Ctrl-C.
+  `--fake-pbx` swaps Asterisk for the Fake PBX.
 
 ## The engine skeleton
 
@@ -53,6 +58,57 @@ events — exactly the bridge `ARICallIO` is built around.
 **Phase 2 seam.** `active_session` is the shared in-memory state: the dashboard
 WS/HTTP server slots into this same process and reads it directly to render the
 live call. Persistence and the read side share one process, one in-memory state.
+
+## The Fake PBX
+
+Phase 2 is built at the kitchen table, not in the booth. `fake_pbx.py` is what
+makes that possible: a stand-in for Asterisk that speaks the same surface
+`ARIClient` does, fires synthetic Call Sessions at the real `CallEngine` on a
+timer, and emits synthetic call audio. Everything below Asterisk is genuine —
+the real mode handlers run through the real `CallIO` seam, and the completed
+sessions land in a real `CallStore`. Only the PBX is pretend.
+
+```
+python -m engine --fake-pbx                      # synthetic calls, forever
+python -m engine --fake-pbx --fake-cycles 1      # one pass of the matrix, then exit
+python -m engine --fake-pbx --fake-audio-wav     # …and record the Listen-in audio
+```
+
+`FakePBX` is the structural fake the engine tests were already written against,
+promoted out of `tests/`. The harness and `tests/test_call_engine.py` drive that
+same fake, so the thing a dev runs all day is the thing the suite covers.
+
+**The scenario matrix.** `DEFAULT_SCENARIOS` walks every Mode and every terminal
+outcome a caller can reach: dial the Code and win, burn the Attempt Limit and be
+Exiled, pick up and say nothing. Before each call the harness writes that
+scenario's Global Config (atomically — the engine is reading it at pickup), then
+places the call and reads the persisted `CallRecord` back to check the session
+ended where the scenario said it would. A run that starts logging warnings is
+the signal that a change broke a Mode.
+
+**Pacing.** The fake dawdles over `play` and `read_digits` (`Pacing`, default
+`LIFELIKE`) so a synthetic call takes about as long as a real one and the
+Console has something to watch. Tests run it at `INSTANT`.
+
+**Synthetic audio.** `SyntheticAudioStream` emits 20 ms slin16 frames at 8 kHz —
+the frame ARI ExternalMedia delivers — in wall-clock time, for as long as the
+call lasts. A Listen-in consumer subscribes with `FakePBX.subscribe_audio`,
+which is how the browser half of Listen-in gets built with no hardware; only
+Snoop → ExternalMedia needs the rig. Following ADR-0003, the media path is spun
+up **on demand**: with nobody listening the fake generates nothing, and a
+consumer that attaches mid-call hears the rest of it. Each call steps to a new
+tone so a new call is audible as one. `--fake-audio-wav` records the frames to a
+playable WAV — until the Console can play them, that is how a human checks the
+fake's audio is audio.
+
+**It cannot be reached by accident.** Fake mode rewrites Global Config between
+calls and fills the call store with invented history, so: the `--fake-pbx` flag
+is the only switch (no environment variable, no config key, never a default);
+the engine refuses to start if fake mode is requested while a real ARI
+connection is configured (any `ARI_*` variable set); and the run is sandboxed in
+its own workspace — config, logs, puzzle pool and database under
+`PIZZA_FAKE_PBX_DIR` (default `data/fake-pbx`, gitignored). The booth's
+`config/mode.json` and call store are never touched.
 
 ## The call-history store
 

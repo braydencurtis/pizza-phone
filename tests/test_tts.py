@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,24 @@ from core.tts import (
 )
 
 
+class WritingBackend:
+    """A backend that just writes a file.
+
+    ``synthesize`` is about naming and placing the output, not about any
+    particular TTS binary, so its tests take a backend that needs nothing
+    installed rather than shelling out to one that does.
+    """
+
+    def synthesize(self, text: str, output_path: Path) -> None:
+        output_path.write_bytes(b"RIFF")
+
+
+# The Espeak and Flite backends are tested against a mocked subprocess; these
+# three actually run `say`, which exists only on macOS. The engine host is
+# Linux (espeak/flite), so they skip everywhere but a Mac dev machine.
+@pytest.mark.skipif(
+    shutil.which("say") is None, reason="macOS `say` is not installed"
+)
 class TestSayBackend:
 
     def test_synthesize_produces_valid_wav(self, tmp_path: Path) -> None:
@@ -151,14 +170,14 @@ class TestDetectBackend:
 class TestSynthesize:
 
     def test_returns_wav_path(self, tmp_path: Path) -> None:
-        backend = SayBackend()
+        backend = WritingBackend()
         result = synthesize("test", backend=backend, output_dir=tmp_path)
 
         assert result.suffix == ".wav"
         assert result.exists()
 
     def test_returns_path_in_output_dir(self, tmp_path: Path) -> None:
-        backend = SayBackend()
+        backend = WritingBackend()
         result = synthesize("test", backend=backend, output_dir=tmp_path)
 
         assert str(tmp_path) in str(result)
@@ -190,7 +209,7 @@ class TestSynthesize:
             assert "TTS failed" in str(e)
 
     def test_multiple_calls_produce_unique_files(self, tmp_path: Path) -> None:
-        backend = SayBackend()
+        backend = WritingBackend()
         path1 = synthesize("test", backend=backend, output_dir=tmp_path)
         path2 = synthesize("test", backend=backend, output_dir=tmp_path)
 

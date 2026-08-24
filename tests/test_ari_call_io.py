@@ -252,7 +252,10 @@ def test_tweeted_flow_exiles_and_hangs_up_against_the_adapter(tmp_path: Path) ->
 def test_roguelike_flow_runs_against_the_adapter(tmp_path: Path) -> None:
     async def run() -> dict[str, Any]:
         ari = FakeARI(dtmf=["1"] * 40)
-        io = _io(ari, asyncio.get_running_loop())
+        # The roguelike speaks every node, so the adapter needs a TTS backend;
+        # supply the fake one rather than depending on espeak/say being
+        # installed on whatever machine runs the suite.
+        io = _io(ari, asyncio.get_running_loop(), tts=FakeTTS(), output_dir=tmp_path)
         router = _router(tmp_path, mode="roguelike", code="0000")
         return await asyncio.to_thread(flow.run_roguelike, io, router, code="0000")
 

@@ -30,5 +30,19 @@ A backrooms-themed phone booth experience. Callers solve puzzles to earn a 4-dig
 
 ## Development
 
+Run the Call Engine against Asterisk:
+
+```
+python -m engine
+```
+
+Or, away from the booth, against the **Fake PBX** — synthetic calls driving the
+real engine, so the Operator Console can be built and demonstrated with no
+hardware attached (development only; see [engine/README.md](./engine/README.md)):
+
+```
+python -m engine --fake-pbx
+```
+
 See [CONTEXT.md](./CONTEXT.md) for glossary and architectural decisions.
 See [backrooms-phone-brief.md](./backrooms-phone-brief.md) for the project brief.

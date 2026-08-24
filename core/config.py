@@ -80,7 +80,10 @@ def read_raw(path: Path) -> dict[str, Any]:
     """
     data = json.loads(path.read_text())
     if not isinstance(data, dict):
-        raise ValueError(f"{path} does not contain a config object")
+        # ValueError rather than TypeError: a config file holding the wrong
+        # shape is bad *content*, like an unknown Mode — not a caller passing
+        # the wrong type.
+        raise ValueError(f"{path} does not contain a config object")  # noqa: TRY004
     return data
 
 

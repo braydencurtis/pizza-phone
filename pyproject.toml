@@ -12,7 +12,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# The checks a change is expected to pass: the suite, the type checker, the
+# linter. Pinned only by lower bound — this is a hobby rig, not a fleet.
+dev = ["pytest", "mypy", "ruff"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Flat layout: the importable packages, spelled out so setuptools doesn't try
+# to guess from the repo root (which also holds tests/, scripts/ and docs/).
+packages = ["core", "engine", "tools"]
+
+[tool.ruff]
+# House style is ~100 columns, not ruff's default 88.
+line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

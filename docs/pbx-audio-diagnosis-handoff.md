@@ -73,11 +73,13 @@ The HT814 does not answer ICMP — that is normal, not a fault.
 
 ### Dialplan shape (`/etc/asterisk/extensions.conf`)
 
-- `[from-pots]` — **the rotary phone can only send digits during call setup**
-  (pulse dialing, decoded by the HT814 while it supplies dial tone). So the
-  *dialled number IS the code*, tested before answering. A non-matching 4-digit
-  dial gets `vm-incorrect` + `vm-goodbye`. A touch-tone path with `Read()` exists
-  for other phones.
+- `[from-pots]` — the *dialled number IS the code*, tested before answering. A
+  non-matching 4-digit dial gets `vm-incorrect` + `vm-goodbye`. A touch-tone path
+  with `Read()` exists for other phones.
+  > **This is a choice of the demo build, not a hardware limit.** The HT814
+  > decodes the booth phone's pulse dialing and sends digits as DTMF, including
+  > mid-call — so in-call digit entry works on the rotary handset, and the Audio
+  > Puzzle and Roguelike Modes are viable on it as specced.
 - Win path: `Answer()` → `Playback(auth-thankyou)` → `Dial(PJSIP/upstairs,30)`.
 - `[from-internal]` (upstairs only): `1000`/`100` rings the booth, `6000`/`600`
   Echo test, `700` self-test that sends the code as DTMF.

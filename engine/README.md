@@ -21,8 +21,9 @@ blocking AGI scripts. See ADR-0001 and epic #13.
   run off the event loop via `asyncio.to_thread` (see below). The `recording_*`
   columns hold WAV paths and stay empty until Phase 3.
 - `call_session.py` — `CallSession`: the engine's live in-memory state for the
-  single active call. Carries the call's identity from `StasisStart`, is filled
-  in with the terminal outcome, and flattens into a `CallRecord`.
+  single active call. Carries the call's identity from `StasisStart` and the
+  Config Snapshot it picked up with, is filled in with the terminal outcome, and
+  flattens into a `CallRecord`.
 - `call_engine.py` — `CallEngine`: the Phase 1 skeleton. Owns the ARI event
   loop; on each `StasisStart` runs one Call Session end-to-end and persists it.
 - `fake_pbx.py` — the **Fake PBX**: a scripted stand-in for Asterisk that fires
@@ -36,10 +37,13 @@ blocking AGI scripts. See ADR-0001 and epic #13.
 ## The engine skeleton
 
 `CallEngine` (#19) is the single asyncio process that owns live calls. On each
-`StasisStart` it answers the channel, loads config, and dispatches to the
-configured mode's `core.flow` handler (tweeted / puzzle / roguelike) through the
-`ARICallIO` seam — the same handlers, unchanged, that the retired AGI driver
-ran. On the terminal outcome the flow routes the caller (success → the
+`StasisStart` it takes the call's Config Snapshot (`core/config.py`), answers
+the channel, and dispatches to that snapshot's mode — tweeted / puzzle /
+roguelike — through the `core.flow` handler behind the `ARICallIO` seam: the
+same handlers, unchanged, that the retired AGI driver ran. The snapshot is what
+that call is judged against for its whole duration, so an Operator rotating the
+Code mid-call affects the next caller, never the one on the line (#34). On the
+terminal outcome the flow routes the caller (success → the
 `pizza-success` context; otherwise hangup), and the engine persists the
 completed `CallSession` to the `CallStore`.
 

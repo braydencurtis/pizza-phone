@@ -5,12 +5,13 @@ import os
 from pathlib import Path
 
 from core.code_manager import update_mode_and_code
+from core.config import VALID_MODES
 from tools.slack_notifier import SlackNotifier
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rotate pizza phone code and mode")
-    parser.add_argument("--mode", required=True, choices=["tweeted", "puzzle", "roguelike"], help="New mode (tweeted, puzzle, roguelike)")
+    parser.add_argument("--mode", required=True, choices=list(VALID_MODES), help="New mode (tweeted, puzzle, roguelike)")
     parser.add_argument("--code", required=True, help="New 4-digit code")
     parser.add_argument("--config", default=str(Path(__file__).parent.parent / "config" / "mode.json"), help="Path to mode.json")
     args = parser.parse_args()

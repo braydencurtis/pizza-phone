@@ -1,33 +1,37 @@
+"""Evaluate one attempt of a Call Session against its Config Snapshot."""
+
 from __future__ import annotations
 
-import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from core import mode_puzzle, mode_tweeted
+from core.config import ConfigSnapshot
 from core.headless import run_roguelike
 from core.logger import CallSessionLogger
-from core.types import Mode, Outcome
-
-VALID_MODES: list[Mode] = ["tweeted", "puzzle", "roguelike"]
+from core.types import Outcome
 
 
 class Router:
+    """Judges a Call Session's attempts against the config it picked up with.
 
-    config_path: Path
-    config: dict[str, Any]
+    One Router per Call Session. It is handed a :class:`ConfigSnapshot` taken at
+    pickup and never re-reads Global Config, so an Operator rotating the Code or
+    switching Mode mid-call cannot change the game the current caller is being
+    scored against — the write lands on the next call, which takes its own
+    snapshot. (Before #34 the router re-read ``mode.json`` per attempt, and a
+    rotation mid-call failed callers for correctly answering the riddle they had
+    just been played.)
+    """
+
+    config: ConfigSnapshot
     logger: CallSessionLogger
 
-    def __init__(self, config_dir: Path, log_dir: Path) -> None:
-        self.config_path = config_dir / "mode.json"
+    def __init__(self, config: ConfigSnapshot, log_dir: Path) -> None:
+        self.config = config
         self.logger = CallSessionLogger(log_dir)
-        self.config = {}
-
-    def load_config(self) -> dict[str, Any]:
-        self.config = json.loads(self.config_path.read_text())
-        return self.config
 
     def dispatch(
         self,
@@ -38,17 +42,13 @@ class Router:
         puzzle_id: str | None = None,
         log: bool = True,
     ) -> dict[str, Any]:
-        self.load_config()
-        mode: str = self.config.get("mode", "tweeted")
-        if mode not in VALID_MODES:
-            raise ValueError(f"Unknown mode: {mode!r}")
-
+        mode = self.config.mode
         if mode == "puzzle" and not puzzle_id:
             raise ValueError("puzzle_id is required for puzzle mode")
 
         start = time.monotonic()
-        code: str = self.config.get("code", "0000")
-        max_attempts: int = self.config.get("attempt_limit", 3)
+        code = self.config.code
+        max_attempts = self.config.attempt_limit
 
         if mode == "tweeted":
             handler_result = mode_tweeted.handle(code_attempt or "", code, attempt, max_attempts)

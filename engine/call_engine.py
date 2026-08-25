@@ -1,11 +1,13 @@
 """The Call Engine: one asyncio process that owns live calls via ARI/Stasis.
 
 This is the Phase 1 skeleton (issue #19). It connects to Asterisk over ARI,
-and on each ``StasisStart`` runs one Call Session end-to-end: answer, load
-config, dispatch to the mode handler (tweeted / puzzle / roguelike) through the
-``ARICallIO`` seam, then persist the completed session to the SQLite
-``CallStore``. The mode handlers and the success/hangup routing are
-``core.flow`` unchanged — the same logic the retired AGI driver ran.
+and on each ``StasisStart`` runs one Call Session end-to-end: take a Config
+Snapshot, answer, dispatch to the mode handler (tweeted / puzzle / roguelike)
+through the ``ARICallIO`` seam, then persist the completed session to the SQLite
+``CallStore``. The snapshot is taken once, at pickup, and the whole call is
+judged against it — see ``core/config.py``. The mode handlers and the
+success/hangup routing are ``core.flow`` unchanged — the same logic the retired
+AGI driver ran.
 
 **One call at a time.** The booth has a single phone, so the engine holds a
 single :class:`~engine.call_session.CallSession` (``active_session``); a second
@@ -33,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from core import flow
+from core.config import CONFIG_FILENAME, take_snapshot
 from core.mode_puzzle import PuzzleSelector
 from core.router import Router
 from core.tts import TTSBackend
@@ -140,12 +143,18 @@ class CallEngine:
     async def _handle_call(self, session: CallSession) -> None:
         """Answer, run the mode to a terminal outcome, and persist the session.
 
-        The mode handler is synchronous ``core.flow`` run in a worker thread;
-        it does the success/hangup routing itself through ``ARICallIO``. Any
-        failure is contained here so one bad call can't take down the engine —
-        the channel is torn down and the slot freed regardless.
+        The Config Snapshot is taken first — before the channel is even
+        answered — so an Operator rotating the Code or switching Mode mid-call
+        lands on the next caller, never this one (#34). The mode handler is synchronous ``core.flow`` run in a worker
+        thread; it does the success/hangup routing itself through ``ARICallIO``.
+        Any failure is contained here so one bad call can't take down the engine
+        — the channel is torn down and the slot freed regardless.
         """
         try:
+            session.config = await asyncio.to_thread(
+                take_snapshot, self._config_dir / CONFIG_FILENAME
+            )
+            session.mode = session.config.mode
             await self._ari.answer(session.channel_id)
             result = await asyncio.to_thread(self._run_mode, session)
             session.complete(result)
@@ -166,47 +175,42 @@ class CallEngine:
     # -- mode dispatch (runs in the worker thread) -------------------------
 
     def _run_mode(self, session: CallSession) -> dict[str, Any]:
-        """Load config and run the configured mode's ``core.flow`` handler.
+        """Run the session's mode through ``core.flow``, against its snapshot.
 
-        Runs off the event loop (worker thread) because ``core.flow`` is
-        blocking and every ``ARICallIO`` call hops back to the loop. Same
-        per-mode dispatch the retired AGI entry point ran, with ARI media names.
+        Config is not read here: the session already carries the snapshot taken
+        at pickup, and the ``Router`` built from it is what every attempt of
+        this call is judged against. Runs off the event loop (worker thread)
+        because ``core.flow`` is blocking and every ``ARICallIO`` call hops back
+        to the loop. Same per-mode dispatch the retired AGI entry point ran,
+        with ARI media names.
         """
         assert self._loop is not None  # set in start(), before any call runs
-        router = Router(config_dir=self._config_dir, log_dir=self._log_dir)
-        config = router.load_config()
-        mode = config.get("mode", "tweeted")
-        code = config.get("code", "0000")
-        max_attempts = config.get("attempt_limit", 3)
-        upstream_ext = config.get("upstream_extension", "200")
-        session.mode = mode
+        config = session.config
+        assert config is not None  # taken in _handle_call, before this runs
+        router = Router(config, log_dir=self._log_dir)
 
         io = ARICallIO(
             self._ari,
             session.channel_id,
             self._loop,
-            upstream_ext=upstream_ext,
+            upstream_ext=config.upstream_extension,
             tts=self._tts,
         )
 
-        if mode == "tweeted":
+        if config.mode == "tweeted":
             return flow.run_tweeted(
                 io,
                 router,
-                code=code,
-                max_attempts=max_attempts,
                 exile_media=EXILE_MEDIA,
                 wrong_media=WRONG_MEDIA,
             )
-        if mode == "puzzle":
-            return self._run_puzzle(io, router, code, max_attempts)
-        if mode == "roguelike":
-            return flow.run_roguelike(io, router, code=code)
-        raise ValueError(f"Unknown mode: {mode!r}")
+        if config.mode == "puzzle":
+            return self._run_puzzle(io, router)
+        if config.mode == "roguelike":
+            return flow.run_roguelike(io, router)
+        raise ValueError(f"Unknown mode: {config.mode!r}")
 
-    def _run_puzzle(
-        self, io: ARICallIO, router: Router, code: str, max_attempts: int
-    ) -> dict[str, Any]:
+    def _run_puzzle(self, io: ARICallIO, router: Router) -> dict[str, Any]:
         """Pick a puzzle from the pool and run the puzzle flow.
 
         Selection is core; resolving the chosen WAV to an ARI ``sound:`` URI is
@@ -216,8 +220,6 @@ class CallEngine:
         return flow.run_puzzle(
             io,
             router,
-            code=code,
-            max_attempts=max_attempts,
             puzzle_id=puzzle_path.name,
             prompt_media=sound_uri(puzzle_path),
             exile_media=EXILE_MEDIA,

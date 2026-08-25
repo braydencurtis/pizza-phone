@@ -3,8 +3,9 @@
 Wires the engine from the environment and the repo layout, then runs it until
 interrupted (Ctrl-C / SIGTERM). ARI connection details come from the
 environment so no secret lands in the repo; the rest of the runtime config
-(mode, code, attempt limit) lives in ``config/mode.json`` and is reloaded per
-call.
+(mode, code, attempt limit) lives in ``config/mode.json``, which each call
+snapshots at pickup — an Operator write lands on the next call, never the live
+one.
 
 Environment:
 

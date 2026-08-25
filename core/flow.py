@@ -5,6 +5,9 @@ caller only through a :class:`~core.call_io.CallIO`. The same functions backed
 the AGI entry point and now the ARI Call Engine; the driver differs, the game
 logic does not.
 
+The Code and the Attempt Limit are not parameters: they come from the
+``Router``'s Config Snapshot, so the digits collected and the digits judged are
+always the same call's config even if the Operator rotates the Code mid-call.
 Media identifiers (``prompt_media``, ``exile_media``, ``wrong_media``) are
 supplied by the caller because their naming is driver-specific — see
 ``CallIO``. Terminal outcomes are logged exactly once via the router.
@@ -28,8 +31,6 @@ def run_tweeted(
     io: CallIO,
     router: Router,
     *,
-    code: str,
-    max_attempts: int,
     exile_media: str,
     wrong_media: str,
     timeout_ms: int = TWEETED_TIMEOUT_MS,
@@ -38,9 +39,7 @@ def run_tweeted(
     return _run_code_entry(
         io,
         router,
-        digit_count=len(code),
         timeout_ms=timeout_ms,
-        max_attempts=max_attempts,
         answer_field="code_attempt",
         extra_dispatch={},
         exile_media=exile_media,
@@ -52,8 +51,6 @@ def run_puzzle(
     io: CallIO,
     router: Router,
     *,
-    code: str,
-    max_attempts: int,
     puzzle_id: str,
     prompt_media: str,
     exile_media: str,
@@ -65,9 +62,7 @@ def run_puzzle(
     return _run_code_entry(
         io,
         router,
-        digit_count=len(code),
         timeout_ms=timeout_ms,
-        max_attempts=max_attempts,
         answer_field="answer",
         extra_dispatch={"puzzle_id": puzzle_id},
         exile_media=exile_media,
@@ -79,12 +74,11 @@ def run_roguelike(
     io: CallIO,
     router: Router,
     *,
-    code: str,
     choice_timeout_ms: int = ROGUELIKE_CHOICE_TIMEOUT_MS,
 ) -> dict[str, Any]:
     """Roguelike mode: navigate the phone-tree, then deliver the code at the leaf."""
     ctx = _RoguelikeCallIOContext(io, choice_timeout_ms)
-    mode_roguelike.handle(ctx, code)
+    mode_roguelike.handle(ctx, router.config.code)
 
     result = router.dispatch()
     if result["outcome"] == "succeed":
@@ -98,9 +92,7 @@ def _run_code_entry(
     io: CallIO,
     router: Router,
     *,
-    digit_count: int,
     timeout_ms: int,
-    max_attempts: int,
     answer_field: str,
     extra_dispatch: dict[str, Any],
     exile_media: str,
@@ -108,10 +100,16 @@ def _run_code_entry(
 ) -> dict[str, Any]:
     """Collect DTMF answers under an attempt limit, dispatching each one.
 
+    How many digits to collect and how many tries the caller gets both come from
+    the router's Config Snapshot, so the caller is judged against the same Code
+    whose length they were asked to dial.
+
     The router evaluates every attempt; only the terminal outcome (success or
     exile) is logged, and exactly once. A wrong non-final answer replays
     ``wrong_media``; no input at all is treated as the caller hanging up.
     """
+    digit_count = len(router.config.code)
+    max_attempts = router.config.attempt_limit
     result: dict[str, Any] = {"outcome": "hangup", "attempts": 0}
     for attempt in range(1, max_attempts + 1):
         entered = io.read_dtmf(digit_count, timeout_ms)

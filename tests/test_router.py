@@ -3,32 +3,33 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from core.config import take_snapshot, write_config
 from core.router import Router
 
 
 def _write_config(config_dir: Path, mode: str = "tweeted", code: str = "1234") -> None:
-    config_dir.mkdir(exist_ok=True)
-    (config_dir / "mode.json").write_text(
-        json.dumps({"mode": mode, "code": code, "attempt_limit": 3, "upstream_extension": "200"})
+    write_config(
+        config_dir / "mode.json",
+        {"mode": mode, "code": code, "attempt_limit": 3, "upstream_extension": "200"},
     )
 
 
 def _make_router(config_dir: Path, log_dir: Path) -> Router:
-    return Router(config_dir=config_dir, log_dir=log_dir)
+    """A router judging against the Config Snapshot taken from the config file."""
+    return Router(take_snapshot(config_dir / "mode.json"), log_dir=log_dir)
 
 
 class TestRouter:
 
-    def test_reads_config(self, tmp_path: Path) -> None:
+    def test_judges_against_its_snapshot(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
         _write_config(config_dir, mode="puzzle", code="9999")
 
         router = _make_router(config_dir, log_dir)
-        config = router.load_config()
-        assert config["mode"] == "puzzle"
-        assert config["code"] == "9999"
+        assert router.config.mode == "puzzle"
+        assert router.config.code == "9999"
 
     def test_dispatches_to_tweeted(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
@@ -160,18 +161,51 @@ class TestRouter:
         log_files = list(log_dir.glob("calls-*.jsonl"))
         assert len(log_files) == 0
 
-    def test_unknown_mode_raises_value_error(self, tmp_path: Path) -> None:
+
+class TestConfigSnapshotIsolation:
+    """A live Call Session is judged against the game it was given (#34)."""
+
+    def test_rotating_the_code_mid_session_does_not_change_judging(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         log_dir = tmp_path / "logs"
-        config_dir.mkdir()
         log_dir.mkdir()
-        (config_dir / "mode.json").write_text(
-            json.dumps({"mode": "unknown_mode", "code": "1234", "attempt_limit": 3})
-        )
-
+        _write_config(config_dir, mode="puzzle", code="4417")
         router = _make_router(config_dir, log_dir)
-        try:
-            router.dispatch()
-            assert False, "Expected ValueError"
-        except ValueError as e:
-            assert "unknown_mode" in str(e)
+
+        # The Operator rotates the Code while the caller is still on the line.
+        _write_config(config_dir, mode="puzzle", code="8080")
+
+        # The caller dials the answer to the riddle they were actually played.
+        result = router.dispatch(answer="4417", attempt=1, puzzle_id="riddle-001.wav")
+        assert result["outcome"] == "succeed"
+        # ...and the freshly rotated Code is not what they are scored against.
+        rotated = router.dispatch(answer="8080", attempt=2, puzzle_id="riddle-001.wav")
+        assert rotated["outcome"] == "fail"
+
+    def test_switching_mode_mid_session_does_not_change_the_callers_mode(
+        self, tmp_path: Path
+    ) -> None:
+        config_dir = tmp_path / "config"
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        _write_config(config_dir, mode="tweeted", code="1234")
+        router = _make_router(config_dir, log_dir)
+
+        _write_config(config_dir, mode="roguelike", code="1234")
+
+        result = router.dispatch(code_attempt="1234")
+        assert result["mode"] == "tweeted"
+
+    def test_a_mid_call_change_applies_to_the_next_session(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / "config"
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        _write_config(config_dir, mode="tweeted", code="1234")
+        live_router = _make_router(config_dir, log_dir)
+
+        _write_config(config_dir, mode="tweeted", code="8080")
+        next_router = _make_router(config_dir, log_dir)
+
+        assert live_router.dispatch(code_attempt="1234")["outcome"] == "succeed"
+        assert next_router.dispatch(code_attempt="8080")["outcome"] == "succeed"
+        assert next_router.dispatch(code_attempt="1234")["outcome"] == "fail"

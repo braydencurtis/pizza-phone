@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from core.config import ConfigSnapshot
 from core.types import Mode, Outcome
 from engine.call_store import CallRecord
 
@@ -23,7 +24,9 @@ from engine.call_store import CallRecord
 class CallSession:
     """One live Call Session, from pickup to terminal outcome.
 
-    ``mode`` starts unset and is stamped once config is loaded for the call;
+    ``config`` is the Config Snapshot taken at pickup — the game this caller was
+    given, and what they are judged against for the whole call however the
+    Operator changes Global Config meanwhile. ``mode`` is stamped from it;
     ``outcome`` / ``attempts`` / ``ended_at`` / ``detail`` stay empty until
     :meth:`complete` records the handler's result.
     """
@@ -32,6 +35,7 @@ class CallSession:
     channel_id: str
     started_at: datetime
     caller_id: str | None = None
+    config: ConfigSnapshot | None = None
     mode: Mode | None = None
     outcome: Outcome | None = None
     attempts: int = 0

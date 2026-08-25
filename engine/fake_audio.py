@@ -109,7 +109,9 @@ class WavTee:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self._wav = wave.open(str(path), "wb")
+        # Held open for the object's lifetime and closed in close(), so a
+        # context manager here would shut the file before the first frame.
+        self._wav = wave.open(str(path), "wb")  # noqa: SIM115
         self._wav.setnchannels(1)
         self._wav.setsampwidth(2)
         self._wav.setframerate(SAMPLE_RATE_HZ)

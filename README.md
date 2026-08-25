@@ -30,6 +30,24 @@ A backrooms-themed phone booth experience. Callers solve puzzles to earn a 4-dig
 
 ## Development
 
+Set up once — a virtualenv with the runtime deps, the test suite, the type
+checker and the linter:
+
+```
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+```
+
+The install is editable, so `core`, `engine` and `tools` import from the
+working tree with no `PYTHONPATH` juggling. The three checks a change is
+expected to pass:
+
+```
+.venv/bin/pytest
+.venv/bin/mypy core engine tools tests
+.venv/bin/ruff check .
+```
+
 Run the Call Engine against Asterisk:
 
 ```

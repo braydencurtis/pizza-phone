@@ -14,11 +14,11 @@ Two layers:
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
 from core import flow
+from core.config import take_snapshot, write_config
 from core.router import Router
 from engine.ari_call_io import ARICallIO
 
@@ -186,14 +186,11 @@ def test_read_dtmf_blocks_the_worker_until_the_loop_resolves_the_read() -> None:
 
 
 def _router(tmp_path: Path, *, mode: str, code: str, attempt_limit: int = 3) -> Router:
-    config_dir = tmp_path / "config"
+    config_path = tmp_path / "config" / "mode.json"
     log_dir = tmp_path / "logs"
-    config_dir.mkdir()
     log_dir.mkdir()
-    (config_dir / "mode.json").write_text(
-        json.dumps({"mode": mode, "code": code, "attempt_limit": attempt_limit})
-    )
-    return Router(config_dir=config_dir, log_dir=log_dir)
+    write_config(config_path, {"mode": mode, "code": code, "attempt_limit": attempt_limit})
+    return Router(take_snapshot(config_path), log_dir=log_dir)
 
 
 def test_puzzle_flow_runs_to_success_against_the_adapter(tmp_path: Path) -> None:
@@ -205,8 +202,6 @@ def test_puzzle_flow_runs_to_success_against_the_adapter(tmp_path: Path) -> None
             flow.run_puzzle,
             io,
             router,
-            code="4242",
-            max_attempts=3,
             puzzle_id="riddle-001.wav",
             prompt_media="sound:puzzles/riddle-001",
             exile_media="sound:voicemail/busy",
@@ -234,8 +229,6 @@ def test_tweeted_flow_exiles_and_hangs_up_against_the_adapter(tmp_path: Path) ->
             flow.run_tweeted,
             io,
             router,
-            code="1234",
-            max_attempts=3,
             exile_media="sound:voicemail/busy",
             wrong_media="sound:beep",
         )
@@ -257,7 +250,7 @@ def test_roguelike_flow_runs_against_the_adapter(tmp_path: Path) -> None:
         # installed on whatever machine runs the suite.
         io = _io(ari, asyncio.get_running_loop(), tts=FakeTTS(), output_dir=tmp_path)
         router = _router(tmp_path, mode="roguelike", code="0000")
-        return await asyncio.to_thread(flow.run_roguelike, io, router, code="0000")
+        return await asyncio.to_thread(flow.run_roguelike, io, router)
 
     result = asyncio.run(run())
     assert result["mode"] == "roguelike"

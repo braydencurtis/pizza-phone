@@ -16,20 +16,19 @@ fake exactly as it will against the real client.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from core.config import write_config
 from engine.call_engine import EXILE_MEDIA, WRONG_MEDIA, CallEngine
 from engine.call_store import CallStore
 from engine.fake_pbx import FakePBX, SilentTTS
 
 
 def _write_config(config_dir: Path, **config: Any) -> None:
-    config_dir.mkdir(parents=True, exist_ok=True)
-    (config_dir / "mode.json").write_text(json.dumps(config))
+    write_config(config_dir / "mode.json", config)
 
 
 async def _engine(tmp_path: Path, ari: FakePBX, **config: Any) -> tuple[CallEngine, CallStore]:
@@ -283,6 +282,84 @@ def test_start_connects_and_registers(tmp_path: Path) -> None:
 
     ari = asyncio.run(run())
     assert ("connect",) in ari.calls
+
+
+# -- Config Snapshot at pickup (#34) ------------------------------------------
+
+
+def test_the_live_session_carries_the_config_it_picked_up_with(tmp_path: Path) -> None:
+    """The console reads the snapshot off the session to show the game in play."""
+
+    async def run() -> Any:
+        seen: list[Any] = []
+        release = asyncio.Event()
+
+        class GatedPBX(FakePBX):
+            async def read_digits(
+                self, channel_id: str, num_digits: int, inter_digit_timeout_ms: int
+            ) -> str:
+                session = engine.active_session
+                seen.append(session.config if session else None)
+                await release.wait()
+                return "1234"
+
+        ari = GatedPBX()
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        await asyncio.sleep(0.02)
+        release.set()
+        await engine.wait_for_idle()
+        return seen
+
+    seen = asyncio.run(run())
+    assert seen and seen[0] is not None
+    assert (seen[0].mode, seen[0].code, seen[0].attempt_limit) == ("tweeted", "1234", 3)
+
+
+def test_a_code_rotated_mid_call_does_not_change_the_live_call(tmp_path: Path) -> None:
+    """The booth bug: the caller answers the riddle they were played and wins."""
+
+    async def run() -> Any:
+        _seed_puzzle_pool(tmp_path)
+
+        class RotatingPBX(FakePBX):
+            async def read_digits(
+                self, channel_id: str, num_digits: int, inter_digit_timeout_ms: int
+            ) -> str:
+                # The Operator rotates the Code between the caller's attempts.
+                _write_config(tmp_path / "config", mode="tweeted", code="8080", attempt_limit=3)
+                return await super().read_digits(channel_id, num_digits, inter_digit_timeout_ms)
+
+        ari = RotatingPBX(dtmf=["0000", "4242"])
+        engine, store = await _engine(tmp_path, ari, mode="puzzle", code="4242", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return store
+
+    store = asyncio.run(run())
+    records = asyncio.run(store.query())
+    assert len(records) == 1
+    assert records[0].mode == "puzzle"  # not the mode the Operator switched to
+    assert records[0].outcome == "succeed"
+
+
+def test_a_config_change_during_a_call_applies_to_the_next_call(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+
+        _write_config(tmp_path / "config", mode="tweeted", code="8080", attempt_limit=3)
+        ari.script(["8080"])
+        await ari.fire_stasis_start("chan-2")
+        await engine.wait_for_idle()
+        return store
+
+    store = asyncio.run(run())
+    records = asyncio.run(store.query())
+    assert len(records) == 2
+    assert {r.outcome for r in records} == {"succeed"}
 
 
 if __name__ == "__main__":

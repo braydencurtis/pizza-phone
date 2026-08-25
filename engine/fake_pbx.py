@@ -33,14 +33,18 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.config import (
+    CONFIG_FILENAME,
+    DEFAULT_ATTEMPT_LIMIT,
+    DEFAULT_UPSTREAM_EXTENSION,
+    write_config,
+)
 from core.types import Mode, Outcome
 from engine.ari_client import STASIS_START, EventHandler
 from engine.call_engine import CallEngine
@@ -283,8 +287,6 @@ class Scenario:
     expect: frozenset[Outcome]
 
 
-DEFAULT_ATTEMPT_LIMIT = 3
-DEFAULT_UPSTREAM_EXTENSION = "200"
 DEFAULT_INTERVAL_S = 8.0
 
 # Every Mode, and every terminal outcome a caller can reach: dial the code and
@@ -379,7 +381,7 @@ class FakeWorkspace:
 
     @property
     def config_path(self) -> Path:
-        return self.config_dir / "mode.json"
+        return self.config_dir / CONFIG_FILENAME
 
 
 def prepare_workspace(root: Path) -> FakeWorkspace:
@@ -403,7 +405,7 @@ def prepare_workspace(root: Path) -> FakeWorkspace:
         directory.mkdir(parents=True, exist_ok=True)
 
     if not workspace.config_path.exists():
-        write_config_atomically(workspace.config_path, global_config(DEFAULT_SCENARIOS[0]))
+        write_config(workspace.config_path, global_config(DEFAULT_SCENARIOS[0]))
 
     pool = workspace.audio_dir / "puzzles"
     pool.mkdir(parents=True, exist_ok=True)
@@ -431,18 +433,6 @@ def global_config(scenario: Scenario) -> dict[str, Any]:
         "upstream_extension": DEFAULT_UPSTREAM_EXTENSION,
         "tts_backend": None,
     }
-
-
-def write_config_atomically(path: Path, config: dict[str, Any]) -> None:
-    """Write Global Config so a concurrent reader never sees a partial file.
-
-    The harness rewrites config between calls while the engine reads it at
-    pickup; a plain truncate-and-write would occasionally hand a live call an
-    empty file. (Issue #34 makes the same guarantee for the Operator's writes.)
-    """
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(config, indent=2) + "\n")
-    os.replace(tmp, path)
 
 
 # -- the harness -------------------------------------------------------------
@@ -534,7 +524,7 @@ class FakePBXHarness:
 
     def _write_config(self, scenario: Scenario) -> None:
         """Set Global Config for the call about to be placed."""
-        write_config_atomically(self._config_path, global_config(scenario))
+        write_config(self._config_path, global_config(scenario))
 
     def _report(self, scenario: Scenario, record: CallRecord | None, frames: int) -> None:
         if record is None:

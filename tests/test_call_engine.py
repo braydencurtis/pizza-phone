@@ -362,5 +362,69 @@ def test_a_config_change_during_a_call_applies_to_the_next_call(tmp_path: Path) 
     assert {r.outcome for r in records} == {"succeed"}
 
 
+# -- the console's change hook (#35) ------------------------------------------
+
+
+def test_the_engine_announces_a_call_starting_and_ending(tmp_path: Path) -> None:
+    """The seam the Console pushes snapshots from: state moved, come and look."""
+
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+
+        # Record what the live state *was* at each announcement, since that is
+        # all the Console does with it: build a snapshot and broadcast.
+        seen: list[str | None] = []
+        engine.on_change(
+            lambda: seen.append(
+                engine.active_session.session_id if engine.active_session else None
+            )
+        )
+
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    seen = asyncio.run(run())
+    assert seen, "a call came and went without the console hearing about it"
+    assert seen[0] is not None, "the first announcement should carry the new call"
+    assert seen[-1] is None, "the last announcement should be the booth going idle"
+
+
+def test_a_console_can_stop_listening(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        calls: list[int] = []
+        unsubscribe = engine.on_change(lambda: calls.append(1))
+        unsubscribe()
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return calls
+
+    assert asyncio.run(run()) == []
+
+
+def test_a_broken_console_subscriber_does_not_break_the_call(tmp_path: Path) -> None:
+    """A dead browser socket must not cost the caller their call."""
+
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+
+        def explode() -> None:
+            raise RuntimeError("console blew up")
+
+        engine.on_change(explode)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return store
+
+    store = asyncio.run(run())
+    records = asyncio.run(store.query())
+    assert len(records) == 1
+    assert records[0].outcome == "succeed"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

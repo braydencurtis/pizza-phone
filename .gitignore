@@ -7,6 +7,12 @@ logs/*.log
 data/
 *.db
 
+# The Console's shared password (the example file is the committed one)
+config/console.json
+
+# Frontend toolchain. web/dist IS committed — the booth host has no toolchain.
+web/node_modules/
+
 # Python
 __pycache__/
 *.py[cod]

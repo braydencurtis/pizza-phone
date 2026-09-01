@@ -54,6 +54,21 @@ Run the Call Engine against Asterisk:
 python -m engine
 ```
 
+The same process serves the **Operator Console** on port 8080, gated by one
+shared password: put it in `config/console.json` (copy
+`config/console.json.example` — the real file is gitignored) or set
+`PIZZA_CONSOLE_PASSWORD`. With neither set the engine refuses to start rather
+than serve the booth's Code to the network; `--no-console` is the deliberate way
+to run just the phone.
+
+The Console's frontend lives in [`web/`](./web/README.md) — React + Vite, with
+`web/dist` committed so the booth host needs no Node toolchain. Change anything
+under `web/src` and rebuild in the same commit:
+
+```
+cd web && npm install && npm run build
+```
+
 Or, away from the booth, against the **Fake PBX** — synthetic calls driving the
 real engine, so the Operator Console can be built and demonstrated with no
 hardware attached (development only; see [engine/README.md](./engine/README.md)):

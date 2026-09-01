@@ -26,6 +26,12 @@ blocking AGI scripts. See ADR-0001 and epic #13.
   flattens into a `CallRecord`.
 - `call_engine.py` — `CallEngine`: the Phase 1 skeleton. Owns the ARI event
   loop; on each `StasisStart` runs one Call Session end-to-end and persists it.
+- `console.py` — `ConsoleServer`: the Operator Console's server. Serves the
+  built bundle from `web/dist`, gates it behind the shared password, and pushes
+  whole-state snapshots to every attached browser over `/ws/telemetry`.
+- `snapshot.py` — `build_snapshot`: the one place that knows the console's wire
+  shape. Global Config plus the live Call Session, or an explicit idle marker,
+  under a `schema` version.
 - `fake_pbx.py` — the **Fake PBX**: a scripted stand-in for Asterisk that fires
   synthetic Call Sessions at the real engine. Development only (see below).
 - `fake_audio.py` — the Fake PBX's media path: synthetic 8 kHz slin frames for a
@@ -59,9 +65,46 @@ spawns a background task; that task runs the synchronous `core.flow` handler in
 a worker thread (`asyncio.to_thread`) while the loop stays free to service
 events — exactly the bridge `ARICallIO` is built around.
 
-**Phase 2 seam.** `active_session` is the shared in-memory state: the dashboard
-WS/HTTP server slots into this same process and reads it directly to render the
-live call. Persistence and the read side share one process, one in-memory state.
+**Phase 2 seam.** `active_session` is the shared in-memory state: the Console
+server slots into this same process and reads it directly to render the live
+call. Persistence and the read side share one process, one in-memory state.
+`on_change` is the other half of that seam — the engine announces that the live
+state moved (slot claimed, Mode stamped at pickup, call over) and knows nothing
+about who is listening or what they do with it.
+
+## The Operator Console
+
+One process, one port (#35). `ConsoleServer` runs in the engine's own event loop
+and serves three things:
+
+- **The bundle.** `web/dist`, committed, so a deploy is `git pull` + restart.
+  `/login` and `/assets/*` are public — a browser must be able to fetch the JS
+  that draws the password box. Every other path is the Console, and an
+  unauthenticated page request answers *401 with the login page* rather than
+  JSON: honest status, useful body. A missing bundle is a 503 that names the
+  build step, not a 404.
+- **Login.** One shared password (`config/console.json` or
+  `PIZZA_CONSOLE_PASSWORD`), compared with `secrets.compare_digest`, exchanged
+  for an opaque token held in memory — so a restart logs everyone out, and
+  operators are indistinguishable by construction. The cookie gates the page
+  *and* the socket upgrade; a socket anyone could open would make the login
+  decorative.
+- **Telemetry.** `/ws/telemetry` sends a snapshot on connect and one per engine
+  change, broadcast to every attached browser (the room, not one laptop).
+  Snapshots are **whole state**, never deltas, so a browser that connects late
+  or misses a message is immediately correct and there is no reducer to drift.
+  Global Config is re-read per snapshot: the Console shows what the booth is set
+  to *now*, which is not necessarily what the live call is being judged against
+  — that is the call's frozen Config Snapshot.
+
+Broadcasts are serialized behind a lock so two changes reach every browser in
+the order they happened, a browser that dies mid-send is dropped rather than
+stalling the rest, and an unreadable `mode.json` is logged and skipped rather
+than taking the socket down.
+
+Reconnection is #40, so a dropped socket currently says so and stops — the
+Console distinguishes an idle booth from a lost engine, which is the one thing a
+dashboard must never blur.
 
 ## The Fake PBX
 

@@ -18,13 +18,17 @@ import pytest
 
 from engine import __main__ as engine_main
 from engine.__main__ import (
+    CONSOLE_CONFIG_FILENAME,
+    ConsoleRefused,
     FakeModeRefused,
     ari_is_listening,
     build_runtime,
+    console_password,
     fake_workspace_root,
     parse_args,
 )
 from engine.ari_client import ARIClient
+from engine.console import ConsoleServer
 from engine.fake_pbx import DEFAULT_INTERVAL_S, INSTANT, FakePBX
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -38,7 +42,10 @@ def test_fake_mode_is_off_by_default() -> None:
 
 
 def test_without_the_flag_the_engine_talks_to_real_ari(tmp_path: Path) -> None:
-    runtime = build_runtime(parse_args([]), env={"PIZZA_DB_PATH": str(tmp_path / "calls.db")})
+    runtime = build_runtime(
+        parse_args([]),
+        env={"PIZZA_DB_PATH": str(tmp_path / "calls.db"), "PIZZA_CONSOLE_PASSWORD": "hunter2"},
+    )
     assert isinstance(runtime.ari, ARIClient)
     assert runtime.harness is None
     assert runtime.workspace is None
@@ -48,6 +55,7 @@ def test_environment_cannot_enable_fake_mode(tmp_path: Path) -> None:
     """No env var is a back door — the flag is the only switch."""
     env = {
         "PIZZA_DB_PATH": str(tmp_path / "calls.db"),
+        "PIZZA_CONSOLE_PASSWORD": "hunter2",
         "PIZZA_FAKE_PBX": "1",
         "FAKE_PBX": "true",
         "PIZZA_FAKE_PBX_DIR": str(tmp_path / "fake"),
@@ -161,6 +169,78 @@ def test_fake_workspace_defaults_under_the_repo_data_dir() -> None:
 
 def test_fake_workspace_can_be_relocated(tmp_path: Path) -> None:
     assert fake_workspace_root({"PIZZA_FAKE_PBX_DIR": str(tmp_path)}) == tmp_path
+
+
+# -- the Operator Console the engine serves (#35) -----------------------------
+
+
+def test_the_console_password_comes_from_the_environment(tmp_path: Path) -> None:
+    assert console_password({"PIZZA_CONSOLE_PASSWORD": "hunter2"}, tmp_path) == "hunter2"
+
+
+def test_the_console_password_falls_back_to_the_config_file(tmp_path: Path) -> None:
+    (tmp_path / CONSOLE_CONFIG_FILENAME).write_text(json.dumps({"password": "from-file"}))
+    assert console_password({}, tmp_path) == "from-file"
+
+
+def test_the_environment_wins_over_the_config_file(tmp_path: Path) -> None:
+    (tmp_path / CONSOLE_CONFIG_FILENAME).write_text(json.dumps({"password": "from-file"}))
+    assert console_password({"PIZZA_CONSOLE_PASSWORD": "from-env"}, tmp_path) == "from-env"
+
+
+def test_no_password_anywhere_is_no_password(tmp_path: Path) -> None:
+    assert console_password({}, tmp_path) is None
+
+
+def test_a_blank_password_is_not_a_password(tmp_path: Path) -> None:
+    """An empty string would let anyone in by submitting nothing."""
+    (tmp_path / CONSOLE_CONFIG_FILENAME).write_text(json.dumps({"password": "  "}))
+    assert console_password({"PIZZA_CONSOLE_PASSWORD": ""}, tmp_path) is None
+
+
+def test_the_engine_serves_the_console(tmp_path: Path) -> None:
+    runtime = build_runtime(
+        parse_args([]),
+        env={
+            "PIZZA_DB_PATH": str(tmp_path / "calls.db"),
+            "PIZZA_CONSOLE_PASSWORD": "hunter2",
+            "PIZZA_CONSOLE_PORT": "9123",
+        },
+    )
+    assert isinstance(runtime.console, ConsoleServer)
+
+
+def test_the_console_can_be_left_off(tmp_path: Path) -> None:
+    """An escape hatch for a run that only wants the phone working."""
+    runtime = build_runtime(
+        parse_args(["--no-console"]),
+        env={"PIZZA_DB_PATH": str(tmp_path / "calls.db")},
+    )
+    assert runtime.console is None
+
+
+def test_the_console_refuses_to_serve_without_a_password(tmp_path: Path) -> None:
+    with pytest.raises(ConsoleRefused) as excinfo:
+        build_runtime(parse_args([]), env={"PIZZA_DB_PATH": str(tmp_path / "calls.db")})
+    assert "PIZZA_CONSOLE_PASSWORD" in str(excinfo.value)
+
+
+def test_fake_mode_serves_the_console_without_a_password(tmp_path: Path) -> None:
+    """The kitchen table doesn't need a password ritual; the sandbox is fake."""
+    runtime = build_runtime(
+        parse_args(["--fake-pbx"]), env={"PIZZA_FAKE_PBX_DIR": str(tmp_path / "fake")}
+    )
+    assert isinstance(runtime.console, ConsoleServer)
+
+
+def test_fake_mode_reports_the_sandbox_config_not_the_booths(tmp_path: Path) -> None:
+    """The Console must show the config the fake calls are actually running."""
+    runtime = build_runtime(
+        parse_args(["--fake-pbx"]), env={"PIZZA_FAKE_PBX_DIR": str(tmp_path / "fake")}
+    )
+    assert runtime.console is not None
+    assert runtime.workspace is not None
+    assert runtime.console.config_path == runtime.workspace.config_path
 
 
 if __name__ == "__main__":

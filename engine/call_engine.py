@@ -22,14 +22,20 @@ handler in a worker thread (``asyncio.to_thread``) while the loop stays free to
 service events — the bridge ``ARICallIO`` is built around.
 
 **Phase 2 seam.** ``active_session`` is the shared in-memory state the console
-will read; the dashboard WS/HTTP server slots into this same process and reads
-it directly. See engine/README.md.
+reads; the Console server (``engine/console.py``) slots into this same process
+and reads it directly. ``on_change`` is the other half: the engine announces
+that the live state moved, and the Console turns each announcement into a
+whole-state snapshot broadcast to every open browser. The engine knows nothing
+about HTTP, sockets or snapshots — only that somebody wants to be told. See
+engine/README.md.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -80,8 +86,9 @@ class CallEngine:
         self._tts = tts
 
         # Shared in-memory state: the single live call, or None when idle. The
-        # Phase 2 dashboard reads this off the engine to render the cockpit.
+        # Console reads this off the engine to render the cockpit.
         self.active_session: CallSession | None = None
+        self._change_callbacks: list[Callable[[], None]] = []
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._call_task: asyncio.Task[None] | None = None
@@ -104,6 +111,37 @@ class CallEngine:
         """Await the in-flight call, if any. Used by shutdown and tests."""
         if self._call_task is not None:
             await asyncio.shield(self._call_task)
+
+    # -- the console's view ------------------------------------------------
+
+    def on_change(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Be told whenever the live state moves. Returns an unsubscribe.
+
+        Deliberately a bare nudge with no payload: the Console re-reads
+        ``active_session`` and sends a whole-state snapshot, so there is no
+        event shape to keep in step with the wire format, and a listener that
+        misses one is corrected by the next.
+        """
+        self._change_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            with contextlib.suppress(ValueError):
+                self._change_callbacks.remove(callback)
+
+        return unsubscribe
+
+    def _notify_change(self) -> None:
+        """Announce that the live state moved.
+
+        Every listener is called even if an earlier one raises, and a raising
+        listener is only logged: a browser socket that died must not cost the
+        caller on the line their call.
+        """
+        for callback in list(self._change_callbacks):
+            try:
+                callback()
+            except Exception:
+                logger.exception("A change listener failed; continuing the call")
 
     # -- event handling ----------------------------------------------------
 
@@ -136,6 +174,7 @@ class CallEngine:
             caller_id=caller.get("number") or None,
         )
         self.active_session = session
+        self._notify_change()
         self._call_task = asyncio.create_task(
             self._handle_call(session), name=f"call-{session.session_id}"
         )
@@ -155,6 +194,9 @@ class CallEngine:
                 take_snapshot, self._config_dir / CONFIG_FILENAME
             )
             session.mode = session.config.mode
+            # The Mode is only known once the snapshot is taken, and it is the
+            # first thing the Operator wants to see about a new call.
+            self._notify_change()
             await self._ari.answer(session.channel_id)
             result = await asyncio.to_thread(self._run_mode, session)
             session.complete(result)
@@ -171,6 +213,7 @@ class CallEngine:
             await self._safe_hangup(session.channel_id)
         finally:
             self.active_session = None
+            self._notify_change()
 
     # -- mode dispatch (runs in the worker thread) -------------------------
 

@@ -1,4 +1,4 @@
-"""The telemetry snapshot the Operator Console is rendered from (ticket #35).
+"""The telemetry snapshot the Operator Console is rendered from (#35, #36).
 
 The console is fed *whole-state* snapshots, never deltas: the Global Config the
 booth is set to, plus the live Call Session if one is in progress — or an idle
@@ -6,6 +6,10 @@ marker when none is. One builder turns the two in-memory objects into a
 JSON-ready dict, so the WebSocket server (and any future consumer) has exactly
 one place that knows the wire shape. The ``schema`` number lets a future
 console tell an old shape from a new one without guessing.
+
+The live call carries ``started_at`` and (once over) ``ended_at``, never a
+duration: the browser advances the elapsed clock itself, so a call on the line
+does not generate a message per second purely to tick a timer (ADR-0003).
 """
 
 from __future__ import annotations
@@ -16,7 +20,9 @@ from core.config import ConfigSnapshot
 from core.types import Mode
 from engine.call_session import CallSession
 
-SNAPSHOT_SCHEMA_VERSION = 1
+# 2: the live Call Session gained its state vocabulary, the digits the caller is
+# dialling, and the moment a finished call ended (#36).
+SNAPSHOT_SCHEMA_VERSION = 2
 
 
 def build_snapshot(config: ConfigSnapshot, session: CallSession | None) -> dict[str, Any]:
@@ -47,9 +53,14 @@ def _call_view(session: CallSession | None) -> dict[str, Any] | None:
         mode = session.config.mode
     return {
         "session_id": session.session_id,
+        "state": session.state,
         "mode": mode,
         "caller_id": session.caller_id,
         "started_at": session.started_at.isoformat(),
+        # None while the call is live. Present so the Console can stop the
+        # elapsed clock where the call stopped rather than at "now".
+        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+        "digits": "".join(session.digits),
         "attempts": session.attempts,
         "outcome": session.outcome,
     }

@@ -30,6 +30,7 @@ from engine.console import (
     SessionStore,
     password_matches,
 )
+from engine.snapshot import SNAPSHOT_SCHEMA_VERSION
 
 PASSWORD = "hunter2"
 
@@ -67,6 +68,7 @@ def _session(mode: str = "tweeted") -> CallSession:
         started_at=datetime(2026, 8, 27, 12, 30, tzinfo=UTC),
         caller_id="+15551234567",
         mode=mode,  # type: ignore[arg-type]
+        state="in_mode",
         attempts=2,
     )
 
@@ -372,7 +374,7 @@ def test_ws_sends_the_current_snapshot_on_connect(tmp_path: Path) -> None:
                 ws = await http.ws_connect(f"{fix.base_url}/ws/telemetry")
                 try:
                     snap = await _next_snapshot(ws)
-                    assert snap["schema"] == 1
+                    assert snap["schema"] == SNAPSHOT_SCHEMA_VERSION
                     assert snap["config"] == {
                         "mode": "tweeted",
                         "code": "1234",
@@ -525,5 +527,40 @@ def test_stop_releases_the_port_and_is_idempotent(tmp_path: Path) -> None:
         probe = socket.create_server(("127.0.0.1", port))
         probe.close()
         await fix.server.stop()
+
+    asyncio.run(run())
+
+
+def test_ws_carries_the_live_call_vocabulary_to_the_browser(tmp_path: Path) -> None:
+    """The state, the dialled digits and the win, over the real socket (#36)."""
+
+    async def run() -> None:
+        fix = await _console(tmp_path)
+        try:
+            async with _client() as http:
+                assert await _login(http, fix) == 200
+                ws = await http.ws_connect(f"{fix.base_url}/ws/telemetry")
+                try:
+                    await _next_snapshot(ws)  # the idle booth
+
+                    session = _session()
+                    for digit in "1234":
+                        session.record_digit(digit)
+                    fix.engine.set_session(session)
+                    snap = await _next_snapshot(ws)
+                    assert snap["call"]["state"] == "in_mode"
+                    assert snap["call"]["digits"] == "1234"
+                    assert snap["call"]["started_at"]
+                    assert snap["call"]["ended_at"] is None
+
+                    session.complete({"mode": "tweeted", "outcome": "succeed", "attempts": 1})
+                    fix.engine.set_session(session)
+                    snap = await _next_snapshot(ws)
+                    assert snap["call"]["state"] == "handed_off"
+                    assert snap["call"]["ended_at"]
+                finally:
+                    await ws.close()
+        finally:
+            await fix.server.stop()
 
     asyncio.run(run())

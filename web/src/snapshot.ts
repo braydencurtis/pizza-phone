@@ -7,10 +7,35 @@
  * talking to instead of quietly rendering nonsense.
  */
 
-export const SNAPSHOT_SCHEMA_VERSION = 1;
+/** 2: the call view gained its state vocabulary, live digits and `ended_at`. */
+export const SNAPSHOT_SCHEMA_VERSION = 2;
 
 export type Mode = "tweeted" | "puzzle" | "roguelike";
 export type Outcome = "succeed" | "fail" | "exile" | "hangup";
+
+/**
+ * Where a Call Session has got to.
+ *
+ * The terminal states are kept apart deliberately. `handed_off` is a **win**:
+ * the channel has left the Call Engine for the success dialplan, so everything
+ * after it — the Upstairs Phone ringing, the Operator answering, the pizza —
+ * is invisible from here. If a win rendered like a hangup the Operator would
+ * learn to distrust the panel, so the two never share a look.
+ */
+export type CallState =
+  | "answering"
+  | "in_mode"
+  | "handed_off"
+  | "exiled"
+  | "hung_up"
+  | "dropped";
+
+export const TERMINAL_STATES: ReadonlySet<CallState> = new Set<CallState>([
+  "handed_off",
+  "exiled",
+  "hung_up",
+  "dropped",
+]);
 
 /** What the booth is set to right now (Global Config). */
 export interface ConfigView {
@@ -23,9 +48,15 @@ export interface ConfigView {
 /** The live Call Session, as much of it as the engine knows so far. */
 export interface CallView {
   session_id: string;
+  state: CallState;
   mode: Mode | null;
   caller_id: string | null;
+  /** When the call was picked up. The browser advances the clock from here. */
   started_at: string;
+  /** `null` while the call is live; the moment it ended once it is over. */
+  ended_at: string | null;
+  /** The most recent digits dialled, oldest dropped past the engine's cap. */
+  digits: string;
   attempts: number;
   outcome: Outcome | null;
 }
@@ -41,4 +72,34 @@ export const MODE_LABELS: Record<Mode, string> = {
   tweeted: "Tweeted",
   puzzle: "Audio Puzzle",
   roguelike: "Roguelike Phone-Tree",
+};
+
+/** How each state reads on the panel: its headline, and what it actually means. */
+export const STATE_COPY: Record<CallState, { label: string; note: string }> = {
+  answering: {
+    label: "Answering",
+    note: "The channel is up. Taking the Config Snapshot this call is judged against.",
+  },
+  in_mode: {
+    label: "On the line",
+    note: "The caller is in the game.",
+  },
+  handed_off: {
+    label: "Handed Off",
+    note:
+      "They won. The channel has left the Call Engine for the success dialplan — " +
+      "the Upstairs Phone is ringing, and everything after that is off this panel.",
+  },
+  exiled: {
+    label: "Exiled",
+    note: "They burned the Attempt Limit and heard the Exile message.",
+  },
+  hung_up: {
+    label: "Hung up",
+    note: "The call ended without a win. Nobody is on the line.",
+  },
+  dropped: {
+    label: "Engine dropped the call",
+    note: "The engine ended this call itself — not the caller. Check the engine log.",
+  },
 };

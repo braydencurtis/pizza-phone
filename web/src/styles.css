@@ -152,8 +152,123 @@ body {
   border-style: dashed;
 }
 
-.panel-live {
+/* -- the live call -------------------------------------------------------- */
+
+.panel-call {
   border-color: var(--live);
+}
+
+.state-label {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--live) !important;
+}
+
+.caller {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.04em;
+}
+
+.call-facts {
+  display: flex;
+  justify-content: center;
+  gap: 2.5rem;
+  margin: 1.5rem 0 0;
+}
+
+.call-facts div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.call-facts dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+.call-facts dd {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.call-facts .elapsed {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.digits {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-height: 3rem;
+  margin-top: 1.75rem;
+}
+
+.digit {
+  min-width: 2rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #12161a;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.digits-empty {
+  font-size: 0.85rem;
+  color: var(--dim);
+}
+
+.state-note {
+  margin-top: 1.5rem !important;
+}
+
+/* Each terminal state reads as itself. A win is never the colour of an ending:
+   Handed Off means the caller won and the channel left the engine, and the
+   panel says so rather than going quiet like a hangup. */
+
+.call-handed_off {
+  border-color: var(--live);
+  box-shadow: 0 0 0 1px var(--live) inset;
+}
+
+.call-handed_off .caller,
+.call-handed_off .state-label {
+  color: var(--live) !important;
+}
+
+.call-exiled {
+  border-color: var(--warn);
+}
+
+.call-exiled .state-label {
+  color: var(--warn) !important;
+}
+
+.call-hung_up {
+  border-color: var(--line);
+  border-style: dashed;
+}
+
+.call-hung_up .state-label,
+.call-hung_up .caller {
+  color: var(--dim) !important;
+}
+
+.call-dropped {
+  border-color: var(--bad);
+}
+
+.call-dropped .state-label {
+  color: var(--bad) !important;
 }
 
 .panel-broken h1 {

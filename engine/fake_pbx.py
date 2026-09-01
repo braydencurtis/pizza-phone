@@ -17,10 +17,11 @@ is configured).
 
 Three pieces:
 
-- :class:`FakePBX` — the ARI stand-in. Answers, plays, hands back scripted DTMF,
-  and injects ``StasisStart`` the way the real client's reader would. Promoted
-  from the structural fake the engine tests were already written against, so the
-  harness and the test suite exercise one fake, not two.
+- :class:`FakePBX` — the ARI stand-in. Answers, plays, dials scripted DTMF a key
+  at a time, and injects ``StasisStart`` and ``ChannelDtmfReceived`` the way the
+  real client's reader would. Promoted from the structural fake the engine tests
+  were already written against, so the harness and the test suite exercise one
+  fake, not two.
 - The synthetic media path (``engine/fake_audio.py``) — the frames a Listen-in
   consumer will receive, standing in for ARI Snoop → ExternalMedia. This is the
   half of Listen-in that needs no hardware.
@@ -46,7 +47,7 @@ from core.config import (
     write_config,
 )
 from core.types import Mode, Outcome
-from engine.ari_client import STASIS_START, EventHandler
+from engine.ari_client import CHANNEL_DTMF_RECEIVED, STASIS_END, STASIS_START, EventHandler
 from engine.call_engine import CallEngine
 from engine.call_store import CallRecord, CallStore
 from engine.fake_audio import (
@@ -162,10 +163,24 @@ class FakePBX:
         ``""`` is what the real client returns when a caller enters nothing, and
         what ``core.flow`` reads as a hangup — so an exhausted script is how a
         synthetic caller walks away.
+
+        The digits are *dialled* rather than simply returned: each one is
+        delivered as a ``ChannelDtmfReceived`` event first, the way the real
+        client's reader would, so anything watching the wire (the Console's live
+        digit display) sees a synthetic caller press keys one at a time.
         """
         self.calls.append(("read_digits", channel_id, num_digits))
-        await self._pause(self.pacing.dtmf_s)
-        return self._dtmf.pop(0) if self._dtmf else ""
+        entry = self._dtmf.pop(0) if self._dtmf else ""
+        if not entry:
+            # A caller sitting in silence: the read times out having heard
+            # nothing, which is what the empty string means to ``core.flow``.
+            await self._pause(self.pacing.dtmf_s)
+            return ""
+        per_digit = self.pacing.dtmf_s / len(entry)
+        for digit in entry:
+            await self._pause(per_digit)
+            await self.fire_dtmf(channel_id, digit)
+        return entry
 
     async def hangup(self, channel_id: str) -> None:
         """Tear down a channel."""
@@ -203,6 +218,30 @@ class FakePBX:
             "channel": {"id": channel_id, "caller": {"number": number or ""}},
         }
         for handler in list(self._handlers.get(STASIS_START, ())):
+            result = handler(event)
+            if inspect.isawaitable(result):
+                await result
+
+    async def fire_dtmf(self, channel_id: str, digit: str) -> None:
+        """Deliver one ``ChannelDtmfReceived`` the way ``ARIClient``'s reader would."""
+        event = {
+            "type": CHANNEL_DTMF_RECEIVED,
+            "channel": {"id": channel_id},
+            "digit": digit,
+        }
+        for handler in list(self._handlers.get(CHANNEL_DTMF_RECEIVED, ())):
+            result = handler(event)
+            if inspect.isawaitable(result):
+                await result
+
+    async def fire_channel_gone(self, channel_id: str) -> None:
+        """Deliver the ``StasisEnd`` a caller hanging up produces.
+
+        On a real PBX this is what arrives the moment the handset goes down, and
+        it is how the engine tells the caller leaving from its own failure.
+        """
+        event = {"type": STASIS_END, "channel": {"id": channel_id}}
+        for handler in list(self._handlers.get(STASIS_END, ())):
             result = handler(event)
             if inspect.isawaitable(result):
                 await result

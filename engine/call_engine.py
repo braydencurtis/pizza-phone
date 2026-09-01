@@ -46,7 +46,13 @@ from core.mode_puzzle import PuzzleSelector
 from core.router import Router
 from core.tts import TTSBackend
 from engine.ari_call_io import ARICallIO, sound_uri
-from engine.ari_client import STASIS_START, ARIClient
+from engine.ari_client import (
+    CHANNEL_DTMF_RECEIVED,
+    CHANNEL_HANGUP_REQUEST,
+    STASIS_END,
+    STASIS_START,
+    ARIClient,
+)
 from engine.call_session import CallSession
 from engine.call_store import CallStore, new_session_id
 
@@ -56,6 +62,14 @@ logger = logging.getLogger(__name__)
 # builtin-prompt names). Wrong-answer beep and the Exile disconnect prompt.
 EXILE_MEDIA = "sound:voicemail/busy"
 WRONG_MEDIA = "sound:beep"
+
+# How long a finished Call Session stays on the Console before the booth reads
+# idle again (#36). Terminal states are the point of the panel — a win that
+# flickered past for a millisecond would be a win the Operator never saw — and
+# the snapshot a browser receives is built when the broadcast runs, so without a
+# pause the terminal state could be overwritten by the idle one before either is
+# sent. Display only: the slot is free the instant the call ends.
+AFTERGLOW_S = 6.0
 
 
 class CallEngine:
@@ -77,6 +91,7 @@ class CallEngine:
         log_dir: Path,
         audio_dir: Path,
         tts: TTSBackend | None = None,
+        afterglow_s: float = AFTERGLOW_S,
     ) -> None:
         self._ari = ari
         self._store = store
@@ -84,14 +99,17 @@ class CallEngine:
         self._log_dir = log_dir
         self._audio_dir = audio_dir
         self._tts = tts
+        self._afterglow_s = afterglow_s
 
-        # Shared in-memory state: the single live call, or None when idle. The
-        # Console reads this off the engine to render the cockpit.
+        # Shared in-memory state: the call the Console is showing — the live
+        # one, or the one that just ended, for as long as the afterglow lasts.
+        # None only when there is nothing to show.
         self.active_session: CallSession | None = None
         self._change_callbacks: list[Callable[[], None]] = []
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._call_task: asyncio.Task[None] | None = None
+        self._afterglow_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Initialize the store, register the handler, and connect to ARI."""
@@ -99,12 +117,22 @@ class CallEngine:
         self._log_dir.mkdir(parents=True, exist_ok=True)
         await self._store.initialize()
         self._ari.on(STASIS_START, self._on_stasis_start)
+        self._ari.on(CHANNEL_DTMF_RECEIVED, self._on_dtmf)
+        for event_type in (STASIS_END, CHANNEL_HANGUP_REQUEST):
+            self._ari.on(event_type, self._on_channel_gone)
         await self._ari.connect()
         logger.info("Call engine started")
 
     async def aclose(self) -> None:
-        """Let the active call finish, then close the ARI connection."""
+        """Let the active call finish, then close the ARI connection.
+
+        The afterglow is abandoned rather than waited out: nobody is left to
+        read a finished call off a console whose engine is shutting down.
+        """
         await self.wait_for_idle()
+        if self._afterglow_task is not None:
+            self._afterglow_task.cancel()
+            self._afterglow_task = None
         await self._ari.close()
 
     async def wait_for_idle(self) -> None:
@@ -157,10 +185,11 @@ class CallEngine:
             logger.warning("StasisStart without a channel id: %r", event)
             return
 
-        if self.active_session is not None:
+        live = self.active_session
+        if live is not None and not live.is_over:
             logger.warning(
                 "Busy with session %s; hanging up extra channel %s",
-                self.active_session.session_id,
+                live.session_id,
                 channel_id,
             )
             await self._ari.hangup(channel_id)
@@ -178,6 +207,39 @@ class CallEngine:
         self._call_task = asyncio.create_task(
             self._handle_call(session), name=f"call-{session.session_id}"
         )
+
+    async def _on_dtmf(self, event: dict[str, Any]) -> None:
+        """A digit was dialled: show it on the Console as the caller presses it.
+
+        Read-only observation of an event the engine already receives — the
+        digits are still collected, and judged, by ``ARICallIO``/``core.flow``.
+        Digits for any channel but the live one are ignored: a stray event from
+        a call that has ended has no business writing to the cockpit.
+        """
+        session = self.active_session
+        if session is None or session.is_over:
+            return
+        channel_id = event.get("channel", {}).get("id", "")
+        digit = event.get("digit", "")
+        if not digit or channel_id != session.channel_id:
+            return
+        session.record_digit(digit)
+        self._notify_change()
+
+    async def _on_channel_gone(self, event: dict[str, Any]) -> None:
+        """The caller's channel left us — note who ended the call.
+
+        Whatever the mode handler is in the middle of will now fail: every ARI
+        command against a dead channel 404s. Recording the hangup *here*, while
+        we still know it was the caller, is what lets the terminal state say
+        "hung up" instead of blaming the engine for the exception that follows.
+        """
+        session = self.active_session
+        if session is None or session.is_over:
+            return
+        if event.get("channel", {}).get("id", "") != session.channel_id:
+            return
+        session.caller_gone = True
 
     async def _handle_call(self, session: CallSession) -> None:
         """Answer, run the mode to a terminal outcome, and persist the session.
@@ -198,6 +260,8 @@ class CallEngine:
             # first thing the Operator wants to see about a new call.
             self._notify_change()
             await self._ari.answer(session.channel_id)
+            session.enter_mode()
+            self._notify_change()
             result = await asyncio.to_thread(self._run_mode, session)
             session.complete(result)
             await self._store.add(session.to_record())
@@ -210,10 +274,40 @@ class CallEngine:
             )
         except Exception:
             logger.exception("Session %s failed", session.session_id)
+            session.abandon()
             await self._safe_hangup(session.channel_id)
         finally:
-            self.active_session = None
-            self._notify_change()
+            self._announce_end_and_linger(session)
+
+    # -- the afterglow -----------------------------------------------------
+
+    def _announce_end_and_linger(self, session: CallSession) -> None:
+        """Announce how the call ended, then hold it in view for a moment.
+
+        Two announcements, not one: the terminal state — Handed Off, Exiled,
+        hung up — is the thing the Operator is watching for, so it is broadcast
+        on its own before the booth reads idle. The slot is already free by
+        then; the afterglow is what the Console shows, never what the engine
+        will accept.
+        """
+        self._notify_change()
+        if self._afterglow_s <= 0:
+            self._clear(session)
+            return
+        self._afterglow_task = asyncio.create_task(
+            self._afterglow(session), name=f"afterglow-{session.session_id}"
+        )
+
+    async def _afterglow(self, session: CallSession) -> None:
+        await asyncio.sleep(self._afterglow_s)
+        self._clear(session)
+
+    def _clear(self, session: CallSession) -> None:
+        """Drop a finished call from view — unless a new caller already took its place."""
+        if self.active_session is not session:
+            return
+        self.active_session = None
+        self._notify_change()
 
     # -- mode dispatch (runs in the worker thread) -------------------------
 

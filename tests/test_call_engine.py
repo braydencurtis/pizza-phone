@@ -16,6 +16,7 @@ fake exactly as it will against the real client.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,15 @@ def _write_config(config_dir: Path, **config: Any) -> None:
     write_config(config_dir / "mode.json", config)
 
 
-async def _engine(tmp_path: Path, ari: FakePBX, **config: Any) -> tuple[CallEngine, CallStore]:
+async def _engine(
+    tmp_path: Path, ari: FakePBX, *, afterglow_s: float = 0.0, **config: Any
+) -> tuple[CallEngine, CallStore]:
+    """Wire an engine over ``tmp_path``.
+
+    The afterglow — how long a finished call stays on the Console before the
+    booth reads idle — defaults to zero here so ``wait_for_idle()`` means the
+    engine is genuinely idle; the tests that care about it set their own.
+    """
     config_dir = tmp_path / "config"
     _write_config(config_dir, **config)
     store = CallStore(tmp_path / "calls.db")
@@ -42,9 +51,29 @@ async def _engine(tmp_path: Path, ari: FakePBX, **config: Any) -> tuple[CallEngi
         log_dir=tmp_path / "logs",
         audio_dir=tmp_path / "audio",
         tts=SilentTTS(),
+        afterglow_s=afterglow_s,
     )
     await engine.start()
     return engine, store
+
+
+class GatedPBX(FakePBX):
+    """A fake whose caller holds the line until the test lets go.
+
+    ``read_digits`` blocks on :attr:`release`, so a call can be parked mid-flight
+    while the test looks at (or interferes with) the engine's live state.
+    """
+
+    def __init__(self, entry: str = "1234") -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+        self._entry = entry
+
+    async def read_digits(
+        self, channel_id: str, num_digits: int, inter_digit_timeout_ms: int
+    ) -> str:
+        await self.release.wait()
+        return self._entry
 
 
 def _seed_puzzle_pool(tmp_path: Path) -> None:
@@ -217,14 +246,7 @@ def test_second_call_while_busy_is_hung_up(tmp_path: Path) -> None:
     """One booth phone: a StasisStart during a live call is rejected, not queued."""
 
     async def run() -> Any:
-        release = asyncio.Event()
-
-        class GatedPBX(FakePBX):
-            async def read_digits(self, channel_id: str, num_digits: int, inter_digit_timeout_ms: int) -> str:
-                await release.wait()  # hold the first call open
-                return "1234"
-
-        ari = GatedPBX()
+        ari = GatedPBX()  # holds the first call open
         engine, store = await _engine(tmp_path, ari, mode="tweeted", code="1234")
 
         await ari.fire_stasis_start("chan-1")
@@ -235,7 +257,7 @@ def test_second_call_while_busy_is_hung_up(tmp_path: Path) -> None:
         second_is_hung_up = ("hangup", "chan-2") in ari.calls
         still_first = engine.active_session is first_session
 
-        release.set()
+        ari.release.set()
         await engine.wait_for_idle()
         return store, second_is_hung_up, still_first
 
@@ -292,22 +314,20 @@ def test_the_live_session_carries_the_config_it_picked_up_with(tmp_path: Path) -
 
     async def run() -> Any:
         seen: list[Any] = []
-        release = asyncio.Event()
 
-        class GatedPBX(FakePBX):
+        class WatchingPBX(GatedPBX):
             async def read_digits(
                 self, channel_id: str, num_digits: int, inter_digit_timeout_ms: int
             ) -> str:
                 session = engine.active_session
                 seen.append(session.config if session else None)
-                await release.wait()
-                return "1234"
+                return await super().read_digits(channel_id, num_digits, inter_digit_timeout_ms)
 
-        ari = GatedPBX()
+        ari = WatchingPBX()
         engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
         await ari.fire_stasis_start("chan-1")
         await asyncio.sleep(0.02)
-        release.set()
+        ari.release.set()
         await engine.wait_for_idle()
         return seen
 
@@ -428,3 +448,196 @@ def test_a_broken_console_subscriber_does_not_break_the_call(tmp_path: Path) -> 
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# -- the live state vocabulary and digits (#36) -------------------------------
+
+
+def _states(engine: CallEngine, seen: list[Any]) -> Callable[[], None]:
+    """Record the live state at each announcement — what the Console renders."""
+
+    def note() -> None:
+        session = engine.active_session
+        seen.append(None if session is None else session.state)
+
+    return note
+
+
+def test_a_call_walks_the_state_vocabulary_to_a_win(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    seen = asyncio.run(run())
+    assert seen[0] == "answering"
+    assert "in_mode" in seen
+    assert seen[-2] == "handed_off"  # the win is announced before the booth idles
+    assert seen[-1] is None
+
+
+def test_an_exile_and_a_hangup_are_announced_as_themselves(tmp_path: Path) -> None:
+    async def run(dtmf: list[str]) -> Any:
+        ari = FakePBX(dtmf=dtmf)
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    assert asyncio.run(run(["9999", "8888", "7777"]))[-2] == "exiled"
+    assert asyncio.run(run([]))[-2] == "hung_up"
+
+
+def test_a_failed_call_is_dropped_not_reported_as_a_hangup(tmp_path: Path) -> None:
+    """An engine failure must not masquerade as the caller walking away."""
+
+    async def run() -> Any:
+        ari = FakePBX()
+        engine, _store = await _engine(tmp_path, ari, mode="bogus", code="1234")
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    assert asyncio.run(run())[-2] == "dropped"
+
+
+def test_dialled_digits_reach_the_live_session_as_they_arrive(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        seen: list[str] = []
+        engine.on_change(
+            lambda: seen.append(
+                "".join(engine.active_session.digits) if engine.active_session else ""
+            )
+        )
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    seen = asyncio.run(run())
+    # Every prefix of the dialled code was visible in turn, not just the whole.
+    assert "1" in seen and "12" in seen and "123" in seen and "1234" in seen
+
+
+def test_digits_from_another_channel_are_ignored(tmp_path: Path) -> None:
+    """Only the call the booth is on may write to the console's digit display."""
+
+    async def run() -> Any:
+        ari = GatedPBX()
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234")
+        await ari.fire_stasis_start("chan-1")
+        await asyncio.sleep(0.02)
+        await ari.fire_dtmf("chan-2", "9")
+        digits = list(engine.active_session.digits) if engine.active_session else None
+        ari.release.set()
+        await engine.wait_for_idle()
+        return digits
+
+    assert asyncio.run(run()) == []
+
+
+# -- the afterglow: a finished call stays readable, then the booth idles -------
+
+
+def test_a_finished_call_is_held_in_view_before_the_booth_goes_idle(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, _store = await _engine(
+            tmp_path, ari, afterglow_s=0.15, mode="tweeted", code="1234", attempt_limit=3
+        )
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        held = engine.active_session
+        await asyncio.sleep(0.3)
+        return held, engine.active_session
+
+    held, after = asyncio.run(run())
+    assert held is not None and held.state == "handed_off"
+    assert after is None
+
+
+def test_a_new_call_during_the_afterglow_is_taken_not_refused(tmp_path: Path) -> None:
+    """The booth is free the moment the call ends — the afterglow is display only."""
+
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234", "1234"])
+        engine, store = await _engine(
+            tmp_path, ari, afterglow_s=5.0, mode="tweeted", code="1234", attempt_limit=3
+        )
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        await ari.fire_stasis_start("chan-2")
+        await engine.wait_for_idle()
+        await engine.aclose()
+        return store, ari
+
+    store, ari = asyncio.run(run())
+    assert ("hangup", "chan-2") not in ari.calls  # never refused as busy
+    assert len(asyncio.run(store.query())) == 2
+
+
+def test_a_caller_who_hangs_up_mid_call_is_not_blamed_on_the_engine(tmp_path: Path) -> None:
+    """A dead channel makes the next ARI call fail; that is not an engine fault.
+
+    The handset going down mid-playback is the commonest ending there is, and
+    reporting it as "the engine dropped the call" would be the panel lying about
+    who ended it — the exact failure the state vocabulary exists to prevent.
+    """
+
+    async def run() -> Any:
+        class VanishingPBX(FakePBX):
+            async def play(
+                self, channel_id: str, media: str, *, timeout: float | None = None
+            ) -> None:
+                await self.fire_channel_gone(channel_id)
+                raise RuntimeError("channel is gone (404)")
+
+        ari = VanishingPBX()
+        engine, _store = await _engine(tmp_path, ari, mode="puzzle", code="1234")
+        _seed_puzzle_pool(tmp_path)
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    assert asyncio.run(run())[-2] == "hung_up"
+
+
+def test_an_engine_failure_with_the_caller_still_there_is_dropped(tmp_path: Path) -> None:
+    """The other half of the same fork: nobody hung up, so it was us."""
+
+    async def run() -> Any:
+        ari = FakePBX()
+        engine, _store = await _engine(tmp_path, ari, mode="bogus", code="1234")
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    assert asyncio.run(run())[-2] == "dropped"
+
+
+def test_a_hangup_on_another_channel_does_not_touch_the_live_call(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = GatedPBX()
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234")
+        await ari.fire_stasis_start("chan-1")
+        await asyncio.sleep(0.02)
+        await ari.fire_channel_gone("chan-2")
+        gone = engine.active_session.caller_gone if engine.active_session else None
+        ari.release.set()
+        await engine.wait_for_idle()
+        return gone
+
+    assert asyncio.run(run()) is False

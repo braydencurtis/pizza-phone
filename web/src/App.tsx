@@ -3,15 +3,23 @@
  *
  * The layout follows CONTEXT.md ("Console layout") — Global Config in a top
  * bar, the current call dominating the centre, powers and the past-calls drawer
- * to come. This ticket fills in the two states the engine can currently
- * report: a booth with a call on it, and an idle one. Both must be
- * unmistakable, and neither may be confusable with a console that has lost the
- * engine — hence the connection pill sitting apart from the call itself.
+ * to come. Three things must be unmistakable from across a room: an idle booth,
+ * a live call, and a console that has lost the engine — hence the connection
+ * pill sitting apart from the call itself. Within a call, the terminal states
+ * are held apart just as firmly: a Handed Off win is a different colour and a
+ * different sentence from a hangup, because a panel that blurs them is a panel
+ * the Operator stops believing.
  */
 
 import { useEffect } from "react";
 import { logout } from "./api";
-import { MODE_LABELS, SNAPSHOT_SCHEMA_VERSION } from "./snapshot";
+import { formatElapsed, useElapsed } from "./elapsed";
+import {
+  MODE_LABELS,
+  SNAPSHOT_SCHEMA_VERSION,
+  STATE_COPY,
+  TERMINAL_STATES,
+} from "./snapshot";
 import type { CallView, ConfigView, Snapshot } from "./snapshot";
 import { useTelemetry } from "./telemetry";
 import type { Connection } from "./telemetry";
@@ -139,19 +147,64 @@ function Idle() {
 }
 
 /**
- * A call is live — and that is deliberately all this says.
+ * The call, as it happens: who is on, which game they were given, how long they
+ * have been on it, and what they are dialling.
  *
- * The facts an Operator wants about a call (caller, elapsed time, attempt and
- * node as they happen) arrive with the state vocabulary in #36, and belong in
- * one shape with it rather than a preview here that #36 would have to unpick.
- * Until then the console refuses to imply the booth is idle when it isn't.
+ * The state headline is the load-bearing part. Every terminal state gets its own
+ * colour and its own sentence — above all Handed Off, which is a *win* and must
+ * never be mistaken for the caller hanging up. The panel also says out loud
+ * that a Handed Off call has left the engine, so nobody reads the silence that
+ * follows as the story ending.
  */
 function LiveCall({ call }: { call: CallView }) {
+  const elapsed = useElapsed(call.started_at, call.ended_at);
+  const over = TERMINAL_STATES.has(call.state);
+  const { label, note } = STATE_COPY[call.state];
+
   return (
-    <section className="panel panel-live">
-      <h1>Call in progress</h1>
-      <p>Live telemetry lands here next.</p>
+    <section className={`panel panel-call call-${call.state}`}>
+      <p className="state-label">{label}</p>
+      <h1 className="caller">{call.caller_id ?? "Number withheld"}</h1>
+      <dl className="call-facts">
+        <div>
+          <dt>Mode</dt>
+          <dd>{call.mode ? MODE_LABELS[call.mode] : "—"}</dd>
+        </div>
+        <div>
+          <dt>{over ? "Lasted" : "Elapsed"}</dt>
+          <dd className="elapsed">{formatElapsed(elapsed)}</dd>
+        </div>
+        {/* The engine only learns the attempt count when the mode handler
+            returns, so a live call would show a permanent 0 and then jump — a
+            stale display of exactly the kind ADR-0003 rejects deltas to avoid.
+            The live counter arrives with the CallObserver seam. */}
+        {over && (
+          <div>
+            <dt>Attempts</dt>
+            <dd>{call.attempts}</dd>
+          </div>
+        )}
+      </dl>
+      <Digits digits={call.digits} />
+      <p className="state-note">{note}</p>
       <p className="session">{call.session_id}</p>
     </section>
+  );
+}
+
+/** The keys the caller is pressing, as they press them. */
+function Digits({ digits }: { digits: string }) {
+  return (
+    <div className="digits" aria-label="Digits dialled">
+      {digits === "" ? (
+        <span className="digits-empty">nothing dialled yet</span>
+      ) : (
+        Array.from(digits).map((digit, index) => (
+          <span className="digit" key={`${index}-${digit}`}>
+            {digit}
+          </span>
+        ))
+      )}
+    </div>
   );
 }

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 
 from core.config import ConfigSnapshot
 from core.types import Mode, Outcome
-from engine.call_session import CallSession
+from engine.call_session import CallSession, CallState
 from engine.snapshot import SNAPSHOT_SCHEMA_VERSION, build_snapshot
 
 STARTED_AT = datetime(2026, 8, 27, 12, 30, 0, tzinfo=UTC)
@@ -28,6 +28,8 @@ def _session(
     caller_id: str | None = "+15551234567",
     attempts: int = 2,
     outcome: Outcome | None = None,
+    state: CallState = "in_mode",
+    digits: list[str] | None = None,
 ) -> CallSession:
     return CallSession(
         session_id="sess-1",
@@ -36,13 +38,16 @@ def _session(
         caller_id=caller_id,
         config=config,
         mode=mode,
+        state=state,
+        digits=digits if digits is not None else [],
         attempts=attempts,
         outcome=outcome,
     )
 
 
-def test_schema_version_is_one() -> None:
-    assert SNAPSHOT_SCHEMA_VERSION == 1
+def test_schema_version_is_two() -> None:
+    """#36 added the state vocabulary and the live digits to the call view."""
+    assert SNAPSHOT_SCHEMA_VERSION == 2
 
 
 def test_idle_snapshot_has_no_call() -> None:
@@ -95,3 +100,65 @@ def test_call_view_keeps_a_null_caller_id() -> None:
 def test_completed_call_carries_its_outcome() -> None:
     snap = build_snapshot(_config(), _session(outcome="succeed", config=_config()))
     assert snap["call"]["outcome"] == "succeed"
+
+
+# -- the live Call Session (#36) ----------------------------------------------
+
+
+def test_the_call_view_carries_its_state() -> None:
+    snap = build_snapshot(_config(), _session(state="answering", config=_config()))
+    assert snap["call"]["state"] == "answering"
+
+
+def test_a_live_call_carries_a_start_time_and_no_end() -> None:
+    """The browser advances the clock; a live call has no duration to send."""
+    snap = build_snapshot(_config(), _session(config=_config()))
+    call = snap["call"]
+    assert call["started_at"] == STARTED_AT.isoformat()
+    assert call["ended_at"] is None
+    assert "duration" not in call
+
+
+def test_an_ended_call_carries_the_moment_it_ended() -> None:
+    """So the elapsed timer freezes where the call stopped, not where now is."""
+    session = _session(config=_config())
+    session.complete({"mode": "puzzle", "outcome": "succeed", "attempts": 1})
+    assert session.ended_at is not None
+    snap = build_snapshot(_config(), session)
+    assert snap["call"]["ended_at"] == session.ended_at.isoformat()
+
+
+def test_dialled_digits_reach_the_console_as_they_arrive() -> None:
+    snap = build_snapshot(_config(), _session(digits=["1", "2", "3"], config=_config()))
+    assert snap["call"]["digits"] == "123"
+
+
+def test_a_caller_who_has_dialled_nothing_has_no_digits() -> None:
+    snap = build_snapshot(_config(), _session(config=_config()))
+    assert snap["call"]["digits"] == ""
+
+
+def test_each_terminal_state_is_distinguishable() -> None:
+    """A win, an Exile and a hangup must never render as the same thing."""
+    states = set()
+    for outcome in ("succeed", "exile", "hangup"):
+        session = _session(config=_config())
+        session.complete({"mode": "tweeted", "outcome": outcome, "attempts": 1})
+        states.add(build_snapshot(_config(), session)["call"]["state"])
+    assert states == {"handed_off", "exiled", "hung_up"}
+
+
+def test_a_win_is_handed_off_in_the_snapshot() -> None:
+    session = _session(config=_config())
+    session.complete({"mode": "tweeted", "outcome": "succeed", "attempts": 1})
+    call = build_snapshot(_config(), session)["call"]
+    assert call["state"] == "handed_off"
+    assert call["outcome"] == "succeed"
+
+
+def test_a_dropped_call_says_so_rather_than_passing_for_a_hangup() -> None:
+    session = _session(config=_config())
+    session.abandon()
+    call = build_snapshot(_config(), session)["call"]
+    assert call["state"] == "dropped"
+    assert call["outcome"] is None

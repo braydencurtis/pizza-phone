@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from engine.call_session import CallSession
+from engine.call_session import MAX_LIVE_DIGITS, CallSession
 
 
 def _session(**overrides: object) -> CallSession:
@@ -77,3 +77,78 @@ def test_hangup_is_a_persistable_outcome() -> None:
     record = session.to_record()
     assert record.outcome == "hangup"
     assert record.caller_id is None
+
+
+# -- the live state vocabulary (#36) ------------------------------------------
+
+
+def test_a_new_session_is_answering() -> None:
+    assert _session().state == "answering"
+    assert not _session().is_over
+
+
+def test_entering_the_mode_moves_the_state_on() -> None:
+    session = _session()
+    session.enter_mode()
+    assert session.state == "in_mode"
+    assert not session.is_over
+
+
+def test_a_win_is_handed_off_not_a_hangup() -> None:
+    """The one distinction the panel exists to make."""
+    session = _session()
+    session.complete({"mode": "tweeted", "outcome": "succeed", "attempts": 1})
+    assert session.state == "handed_off"
+    assert session.is_over
+
+
+def test_exhausting_the_attempt_limit_is_exiled() -> None:
+    session = _session()
+    session.complete({"mode": "tweeted", "outcome": "exile", "attempts": 3})
+    assert session.state == "exiled"
+
+
+def test_a_caller_who_says_nothing_hung_up() -> None:
+    session = _session()
+    session.complete({"mode": "tweeted", "outcome": "hangup", "attempts": 0})
+    assert session.state == "hung_up"
+
+
+def test_a_roguelike_walk_that_reached_no_leaf_reads_as_a_hangup() -> None:
+    """"fail" is not a state of its own: the caller's line simply dropped."""
+    session = _session()
+    session.complete({"mode": "roguelike", "outcome": "fail", "attempts": 0})
+    assert session.state == "hung_up"
+
+
+def test_an_engine_failure_is_not_reported_as_a_caller_hangup() -> None:
+    session = _session()
+    session.abandon()
+    assert session.state == "dropped"
+    assert session.is_over
+    assert session.ended_at is not None
+
+
+def test_a_call_abandoned_after_the_caller_left_is_a_hangup() -> None:
+    """The handset went down; the exception that followed was its consequence."""
+    session = _session()
+    session.caller_gone = True
+    session.abandon()
+    assert session.state == "hung_up"
+
+
+def test_digits_accumulate_as_the_caller_dials() -> None:
+    session = _session()
+    for digit in "1234":
+        session.record_digit(digit)
+    assert session.digits == ["1", "2", "3", "4"]
+
+
+def test_the_digit_buffer_keeps_only_the_most_recent() -> None:
+    """A roguelike walk is unbounded; the display of it is not."""
+    session = _session()
+    for digit in "1" * (MAX_LIVE_DIGITS + 5):
+        session.record_digit(digit)
+    session.record_digit("7")
+    assert len(session.digits) == MAX_LIVE_DIGITS
+    assert session.digits[-1] == "7"

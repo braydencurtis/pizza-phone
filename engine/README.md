@@ -22,8 +22,9 @@ blocking AGI scripts. See ADR-0001 and epic #13.
   columns hold WAV paths and stay empty until Phase 3.
 - `call_session.py` — `CallSession`: the engine's live in-memory state for the
   single active call. Carries the call's identity from `StasisStart` and the
-  Config Snapshot it picked up with, is filled in with the terminal outcome, and
-  flattens into a `CallRecord`.
+  Config Snapshot it picked up with, tracks the Call State and the digits being
+  dialled, is filled in with the terminal outcome, and flattens into a
+  `CallRecord`.
 - `call_engine.py` — `CallEngine`: the Phase 1 skeleton. Owns the ARI event
   loop; on each `StasisStart` runs one Call Session end-to-end and persists it.
 - `console.py` — `ConsoleServer`: the Operator Console's server. Serves the
@@ -69,8 +70,52 @@ events — exactly the bridge `ARICallIO` is built around.
 server slots into this same process and reads it directly to render the live
 call. Persistence and the read side share one process, one in-memory state.
 `on_change` is the other half of that seam — the engine announces that the live
-state moved (slot claimed, Mode stamped at pickup, call over) and knows nothing
-about who is listening or what they do with it.
+state moved (slot claimed, Mode stamped at pickup, mode entered, a digit
+dialled, call over) and knows nothing about who is listening or what they do
+with it.
+
+## The live Call Session (#36)
+
+A call reaches the Console as a **Call State**: `answering` → `in_mode` → one
+of `handed_off`, `exiled`, `hung_up` or `dropped`. The terminal states are held
+apart on purpose.
+
+- **`handed_off` is a win, not an ending.** The caller succeeded and the channel
+  left the Call Engine for the success dialplan, so the Upstairs Phone ringing
+  and everything after it is invisible from here. The Console says exactly that.
+  If a win rendered like a hangup, the Operator would learn to distrust the
+  panel.
+- **`dropped` is the engine's fault, not the caller's** — `_handle_call` caught
+  an exception and tore the channel down. Kept apart from `hung_up` for the same
+  reason, and the engine works to keep them apart honestly: a caller who puts
+  the handset down mid-playback makes every following ARI command 404, which
+  would otherwise surface as "the engine dropped the call". So the engine
+  subscribes to `StasisEnd` and `ChannelHangupRequest`, notes on the session
+  that the caller left, and `CallSession.abandon()` picks `hung_up` or `dropped`
+  from that. Neither is persisted — the handler returned no outcome — so this is
+  a Console state only.
+
+Everything the cockpit shows about a live call is observed from ARI events the
+engine already receives, so `core/` is untouched: caller ID and start time come
+from `StasisStart`, the Mode from the Config Snapshot taken at pickup, and the
+dialled digits from `ChannelDtmfReceived` — the engine subscribes alongside
+`ARIClient`'s own DTMF buffering and only *watches*; the digits are still
+collected and judged by `ARICallIO`/`core.flow`. Digits for any channel but the
+live one are ignored. The live digit display is a rolling window
+(`MAX_LIVE_DIGITS`): the roguelike is an infinite maze, so the digit stream has
+no natural end, and the whole call is in the store afterwards regardless.
+
+Snapshots carry `started_at` — and `ended_at` once the call is over — never a
+duration. The browser advances the clock (ADR-0003), so a call on the line does
+not generate a message a second purely to tick a timer.
+
+**The afterglow.** A finished call stays in `active_session` for `AFTERGLOW_S`
+before the booth reads idle, so the Operator actually sees how it ended: a
+terminal state that flickered past in a millisecond is a terminal state nobody
+read, and because a broadcast builds its snapshot when it runs, the idle state
+could otherwise overwrite the win before either was sent. It is display only —
+`is_over` is what the busy check consults, so the next caller is accepted the
+instant the call ends, afterglow or not.
 
 ## The Operator Console
 
@@ -135,7 +180,10 @@ the signal that a change broke a Mode.
 
 **Pacing.** The fake dawdles over `play` and `read_digits` (`Pacing`, default
 `LIFELIKE`) so a synthetic call takes about as long as a real one and the
-Console has something to watch. Tests run it at `INSTANT`.
+Console has something to watch. Tests run it at `INSTANT`. A scripted entry is
+*dialled* rather than just returned: each digit goes out as a
+`ChannelDtmfReceived` first, spaced over the read, so the Console's live digit
+display fills up a key at a time exactly as it will off a real handset.
 
 **Synthetic audio.** `SyntheticAudioStream` emits 20 ms slin16 frames at 8 kHz —
 the frame ARI ExternalMedia delivers — in wall-clock time, for as long as the

@@ -24,6 +24,8 @@ import pytest
 from core.config import write_config
 from engine.call_session import CallSession
 from engine.console import (
+    BROADCAST_TIMEOUT_S,
+    KEEPALIVE,
     SESSION_COOKIE,
     SESSION_TTL,
     ConsoleServer,
@@ -96,7 +98,10 @@ async def _console(
     *,
     bundle: bool = True,
     ttl: timedelta = SESSION_TTL,
+    keepalive: timedelta = KEEPALIVE,
+    broadcast_timeout_s: float = BROADCAST_TIMEOUT_S,
 ) -> _Fixture:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     config_path = tmp_path / "mode.json"
     write_config(
         config_path,
@@ -114,6 +119,8 @@ async def _console(
         host="127.0.0.1",
         port=0,
         session_ttl=ttl,
+        keepalive=keepalive,
+        broadcast_timeout_s=broadcast_timeout_s,
     )
     await server.start()
     return _Fixture(server=server, engine=engine, config_path=config_path)
@@ -560,6 +567,167 @@ def test_ws_carries_the_live_call_vocabulary_to_the_browser(tmp_path: Path) -> N
                     assert snap["call"]["ended_at"]
                 finally:
                     await ws.close()
+        finally:
+            await fix.server.stop()
+
+    asyncio.run(run())
+
+
+# -- reconnection and connection status (#40) --------------------------------
+#
+# The Console recovers on its own and is honest while it cannot. The browser
+# half of that lives in `web/src/link.ts`; these are the two things the engine
+# owes it — a way to tell "your session is gone" from "I am not here", and a
+# socket that keeps saying something so silence means something.
+
+
+def test_the_session_probe_confirms_a_live_session(tmp_path: Path) -> None:
+    async def run() -> None:
+        fix = await _console(tmp_path)
+        try:
+            async with _client() as http:
+                assert await _login(http, fix) == 200
+                resp = await http.get(f"{fix.base_url}/api/session")
+                assert resp.status == 200
+                assert await resp.json() == {"authenticated": True}
+        finally:
+            await fix.server.stop()
+
+    asyncio.run(run())
+
+
+def test_the_session_probe_refuses_a_browser_with_no_session(tmp_path: Path) -> None:
+    async def run() -> None:
+        fix = await _console(tmp_path)
+        try:
+            async with _client() as http:
+                resp = await http.get(f"{fix.base_url}/api/session")
+                assert resp.status == 401
+                assert resp.content_type == "application/json"
+                assert (await resp.json())["authenticated"] is False
+        finally:
+            await fix.server.stop()
+
+    asyncio.run(run())
+
+
+def test_the_session_probe_is_how_a_console_learns_the_engine_restarted(tmp_path: Path) -> None:
+    """The socket can only say "closed"; this is what tells the Operator why.
+
+    A restart takes every Console Session with it (they live in memory on
+    purpose), so the reconnecting browser's cookie is worthless — and it must
+    land back at the password box rather than retrying a socket that will be
+    refused forever. A refused *socket* upgrade is indistinguishable in the
+    browser from an engine that is simply down, so the browser asks over HTTP.
+    """
+
+    async def run() -> None:
+        before = await _console(tmp_path / "before")
+        async with _client() as http:
+            assert await _login(http, before) == 200
+            token = _cookie_token(http)
+            assert token is not None
+        await before.server.stop()
+
+        after = await _console(tmp_path / "after")
+        try:
+            async with _client() as http:
+                http.cookie_jar.update_cookies({SESSION_COOKIE: token})
+                # The socket can only say "refused"…
+                with pytest.raises(aiohttp.WSServerHandshakeError) as excinfo:
+                    await http.ws_connect(f"{after.base_url}/ws/telemetry")
+                assert excinfo.value.status == 401
+                # …and this is where the browser finds out it means "log in".
+                resp = await http.get(f"{after.base_url}/api/session")
+                assert resp.status == 401
+                assert (await resp.json())["authenticated"] is False
+        finally:
+            await after.server.stop()
+
+    asyncio.run(run())
+
+
+def test_the_socket_keeps_saying_something_when_nothing_changes(tmp_path: Path) -> None:
+    """Silence must mean a dead socket, so a quiet booth is never silent.
+
+    A connection killed by sleep or a vanished access point often never fires a
+    close event in the browser. The keepalive is what makes the absence of
+    messages diagnostic — and, being a whole-state snapshot like any other, it
+    also repairs anything a browser managed to miss.
+    """
+
+    async def run() -> None:
+        fix = await _console(tmp_path, keepalive=timedelta(milliseconds=40))
+        try:
+            async with _client() as http:
+                assert await _login(http, fix) == 200
+                ws = await http.ws_connect(f"{fix.base_url}/ws/telemetry")
+                try:
+                    assert (await _next_snapshot(ws))["call"] is None
+                    # No engine change at all — only the pulse.
+                    for _ in range(2):
+                        snap = await _next_snapshot(ws)
+                        assert snap["schema"] == SNAPSHOT_SCHEMA_VERSION
+                        assert snap["call"] is None
+                finally:
+                    await ws.close()
+        finally:
+            await fix.server.stop()
+
+    asyncio.run(run())
+
+
+def test_the_keepalive_stops_with_the_server(tmp_path: Path) -> None:
+    async def run() -> None:
+        fix = await _console(tmp_path, keepalive=timedelta(milliseconds=20))
+        await fix.server.stop()
+        await asyncio.sleep(0.05)
+        assert fix.server._pulse is None
+
+    asyncio.run(run())
+
+
+def test_a_console_that_dies_mid_send_does_not_hold_up_the_room(tmp_path: Path) -> None:
+    """One wedged laptop must not stop everyone else seeing the call.
+
+    Sends go out concurrently and under a deadline, so a browser whose TCP
+    window has closed — asleep, or on a laptop carried out of range — is
+    dropped rather than left blocking the broadcast the rest of the room is
+    waiting on.
+    """
+
+    class _WedgedSocket:
+        closed = False
+
+        async def send_json(self, _snapshot: dict[str, Any]) -> None:
+            await asyncio.sleep(60)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class _HealthySocket:
+        def __init__(self) -> None:
+            self.received: list[dict[str, Any]] = []
+
+        async def send_json(self, snapshot: dict[str, Any]) -> None:
+            self.received.append(snapshot)
+
+        async def close(self) -> None:  # pragma: no cover - never reached
+            raise AssertionError("a healthy console should not be dropped")
+
+    async def run() -> None:
+        fix = await _console(tmp_path, broadcast_timeout_s=0.05)
+        try:
+            wedged = _WedgedSocket()
+            healthy = _HealthySocket()
+            fix.server._sockets.update({wedged, healthy})  # type: ignore[arg-type]
+
+            await asyncio.wait_for(fix.server._broadcast(), timeout=2)
+
+            assert len(healthy.received) == 1
+            assert healthy.received[0]["call"] is None
+            assert wedged not in fix.server._sockets
+            assert healthy in fix.server._sockets
         finally:
             await fix.server.stop()
 

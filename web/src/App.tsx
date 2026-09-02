@@ -9,35 +9,48 @@
  * are held apart just as firmly: a Handed Off win is a different colour and a
  * different sentence from a hangup, because a panel that blurs them is a panel
  * the Operator stops believing.
+ *
+ * **Losing contact is the loudest thing this screen does** (#40). The failure
+ * being designed against is not a console that goes blank — it is one that goes
+ * on looking fine while the engine is gone, so a broken night reads as a quiet
+ * one. So the moment the link is not live, three things happen at once: a red
+ * banner says so and says what it is doing about it, everything the last
+ * snapshot told us is dimmed and stamped with when we last heard it, and the
+ * elapsed clock stops dead. Nothing on screen is left claiming to be current.
  */
 
 import { useEffect } from "react";
 import { logout } from "./api";
-import { formatElapsed, useElapsed } from "./elapsed";
+import { formatElapsed, useCountdown, useElapsed } from "./elapsed";
 import {
   MODE_LABELS,
   SNAPSHOT_SCHEMA_VERSION,
   STATE_COPY,
   TERMINAL_STATES,
 } from "./snapshot";
-import type { CallView, ConfigView, Snapshot } from "./snapshot";
+import type { CallView, ConfigView } from "./snapshot";
 import { useTelemetry } from "./telemetry";
-import type { Connection } from "./telemetry";
+import type { Connection, Telemetry } from "./telemetry";
 
 export function App() {
-  const { connection, snapshot } = useTelemetry();
+  const telemetry = useTelemetry();
+  const { connection, snapshot, stale } = telemetry;
 
   useEffect(() => {
+    // The engine restarted (or the session expired): every Console Session
+    // lives in engine memory, so there is nothing to reconnect to until
+    // somebody types the password again.
     if (connection === "unauthorized") {
       window.location.assign("/login");
     }
   }, [connection]);
 
   return (
-    <div className="console">
+    <div className={stale ? "console is-stale" : "console"}>
+      <Disconnected telemetry={telemetry} />
       <TopBar config={snapshot?.config ?? null} connection={connection} />
       <main className="stage">
-        <Stage connection={connection} snapshot={snapshot} />
+        <Stage telemetry={telemetry} />
       </main>
     </div>
   );
@@ -94,28 +107,66 @@ function ConnectionPill({ connection }: { connection: Connection }) {
   );
 }
 
-function Stage({
-  connection,
-  snapshot,
-}: {
-  connection: Connection;
-  snapshot: Snapshot | null;
-}) {
-  if (connection === "lost") {
-    return (
-      <section className="panel panel-broken">
-        <h1>Engine lost</h1>
-        <p>
-          The telemetry socket closed. This console is showing nothing, not an
-          idle booth — reload to reattach.
-        </p>
-        <button onClick={() => window.location.reload()}>Reload</button>
-      </section>
-    );
-  }
+/**
+ * The banner that makes a lost engine impossible to miss.
+ *
+ * It says three things, in the order an Operator mid-event needs them: contact
+ * is gone, what is on screen is therefore old, and the Console is already
+ * trying again — with the countdown to the next attempt, so nobody has to
+ * wonder whether anything is happening. "Try now" is there for the case where
+ * the Operator knows something the Console doesn't: they just restarted the
+ * engine, or plugged the network back in.
+ */
+function Disconnected({ telemetry }: { telemetry: Telemetry }) {
+  const { connection, retryAt, attempt, snapshot, retry } = telemetry;
+  const seconds = useCountdown(connection === "lost" ? retryAt : null);
 
+  if (connection === "live" || connection === "unauthorized") return null;
+  if (connection === "connecting" && attempt === 0 && snapshot === null) return null;
+
+  return (
+    <div className="alarm">
+      <span className="alarm-dot" aria-hidden="true" />
+      {/* The headline is the live region, not the banner: a countdown inside an
+          alert would re-announce itself to a screen reader once a second. */}
+      <strong role="alert">
+        {connection === "connecting" ? "Reconnecting…" : "Lost contact with the engine"}
+      </strong>
+      <span className="alarm-note">
+        {connection === "connecting"
+          ? "Nothing below is confirmed until the engine answers."
+          : snapshot === null
+            ? "This console has never heard from the engine. It is not an idle booth."
+            : "Everything below is the last thing we heard, not what is happening now."}
+      </span>
+      {seconds !== null && (
+        <span className="alarm-countdown">
+          {seconds > 0 ? `Retrying in ${seconds}s` : "Retrying…"}
+          {attempt > 1 && ` · attempt ${attempt}`}
+        </span>
+      )}
+      <button className="ghost" onClick={retry}>
+        Try now
+      </button>
+    </div>
+  );
+}
+
+function Stage({ telemetry }: { telemetry: Telemetry }) {
+  const { connection, snapshot, stale } = telemetry;
+
+  // Nothing has ever arrived. An engine we cannot reach and an engine we have
+  // not reached *yet* are different sentences, and neither is an idle booth.
   if (snapshot === null) {
-    return (
+    return connection === "lost" ? (
+      <section className="panel panel-broken">
+        <h1>No contact</h1>
+        <p>
+          This console has not heard from the engine. It is showing nothing —
+          not an idle booth. It will keep trying.
+        </p>
+      </section>
+    ) : (
       <section className="panel panel-waiting">
         <h1>Attaching…</h1>
         <p>Waiting for the engine's first snapshot.</p>
@@ -132,16 +183,24 @@ function Stage({
           redeploy the console bundle.
         </p>
       )}
-      {snapshot.call === null ? <Idle /> : <LiveCall call={snapshot.call} />}
+      {snapshot.call === null ? (
+        <Idle stale={stale} />
+      ) : (
+        <LiveCall call={snapshot.call} stale={stale} />
+      )}
     </>
   );
 }
 
-function Idle() {
+function Idle({ stale }: { stale: boolean }) {
   return (
     <section className="panel panel-idle">
       <h1>Booth idle</h1>
-      <p>Nobody is on the phone. The engine is up and watching the line.</p>
+      <p>
+        {stale
+          ? "The booth was idle when we lost the engine. Somebody may be on the phone now."
+          : "Nobody is on the phone. The engine is up and watching the line."}
+      </p>
     </section>
   );
 }
@@ -155,15 +214,23 @@ function Idle() {
  * never be mistaken for the caller hanging up. The panel also says out loud
  * that a Handed Off call has left the engine, so nobody reads the silence that
  * follows as the story ending.
+ *
+ * Off-air the same panel stops asserting. The clock freezes, the labels change
+ * from what *is* to what *was*, and the whole thing is dimmed — because the one
+ * reading an Operator must never take from this panel is a stale call mistaken
+ * for a live one.
  */
-function LiveCall({ call }: { call: CallView }) {
-  const elapsed = useElapsed(call.started_at, call.ended_at);
+function LiveCall({ call, stale }: { call: CallView; stale: boolean }) {
+  const elapsed = useElapsed(call.started_at, call.ended_at, !stale);
   const over = TERMINAL_STATES.has(call.state);
   const { label, note } = STATE_COPY[call.state];
 
   return (
     <section className={`panel panel-call call-${call.state}`}>
-      <p className="state-label">{label}</p>
+      <p className="state-label">
+        {stale && <span className="last-seen">Last seen · </span>}
+        {label}
+      </p>
       <h1 className="caller">{call.caller_id ?? "Number withheld"}</h1>
       <dl className="call-facts">
         <div>
@@ -171,7 +238,7 @@ function LiveCall({ call }: { call: CallView }) {
           <dd>{call.mode ? MODE_LABELS[call.mode] : "—"}</dd>
         </div>
         <div>
-          <dt>{over ? "Lasted" : "Elapsed"}</dt>
+          <dt>{stale && !over ? "Ran to" : over ? "Lasted" : "Elapsed"}</dt>
           <dd className="elapsed">{formatElapsed(elapsed)}</dd>
         </div>
         {/* The engine only learns the attempt count when the mode handler
@@ -186,7 +253,11 @@ function LiveCall({ call }: { call: CallView }) {
         )}
       </dl>
       <Digits digits={call.digits} />
-      <p className="state-note">{note}</p>
+      <p className="state-note">
+        {stale && !over
+          ? "This call was in progress when the engine went out of contact. It may be long over."
+          : note}
+      </p>
       <p className="session">{call.session_id}</p>
     </section>
   );

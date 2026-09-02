@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 // The engine serves this bundle itself in production (one process, one port),
 // so `dist/` is committed and the booth host needs no toolchain. In dev the
@@ -20,6 +20,13 @@ export default defineConfig({
         login: resolve(__dirname, "login.html"),
       },
     },
+  },
+  // The reconnect logic (`src/link.ts`) is a framework-free state machine
+  // with its clock, its socket and its session probe injected, so the suite is
+  // plain Node — no jsdom, no browser.
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
   },
   server: {
     proxy: {

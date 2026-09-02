@@ -134,22 +134,47 @@ and serves three things:
   operators are indistinguishable by construction. The cookie gates the page
   *and* the socket upgrade; a socket anyone could open would make the login
   decorative.
-- **Telemetry.** `/ws/telemetry` sends a snapshot on connect and one per engine
-  change, broadcast to every attached browser (the room, not one laptop).
-  Snapshots are **whole state**, never deltas, so a browser that connects late
-  or misses a message is immediately correct and there is no reducer to drift.
-  Global Config is re-read per snapshot: the Console shows what the booth is set
-  to *now*, which is not necessarily what the live call is being judged against
-  — that is the call's frozen Config Snapshot.
+- **Telemetry.** `/ws/telemetry` sends a snapshot on connect, one per engine
+  change, and one every `KEEPALIVE` regardless, broadcast to every attached
+  browser (the room, not one laptop). Snapshots are **whole state**, never
+  deltas, so a browser that connects late or misses a message is immediately
+  correct and there is no reducer to drift. Global Config is re-read per
+  snapshot: the Console shows what the booth is set to *now*, which is not
+  necessarily what the live call is being judged against — that is the call's
+  frozen Config Snapshot.
 
 Broadcasts are serialized behind a lock so two changes reach every browser in
-the order they happened, a browser that dies mid-send is dropped rather than
-stalling the rest, and an unreadable `mode.json` is logged and skipped rather
-than taking the socket down.
+the order they happened, and an unreadable `mode.json` is logged and skipped
+rather than taking the socket down. Within a broadcast the sends go out
+concurrently and under `BROADCAST_TIMEOUT_S`: a laptop that has been shut or
+carried out of range holds an open socket whose TCP window never drains, and
+without a deadline it would hold the lock — and with it the rest of the room's
+view of the live call — for as long as it liked. A browser that fails or dawdles
+is dropped and closed in the background.
 
-Reconnection is #40, so a dropped socket currently says so and stops — the
-Console distinguishes an idle booth from a lost engine, which is the one thing a
-dashboard must never blur.
+## Reconnection (#40)
+
+The browser owns recovery (`web/src/link.ts`); the engine owes it two things.
+
+**The socket is never silent.** A snapshot goes out every `KEEPALIVE` even when
+nothing has changed, because a connection killed by a sleeping laptop or a
+vanished access point frequently never closes — and without a pulse the browser
+cannot tell that from a booth nobody is calling, so it sits on a frozen screen
+that looks fine. Being a whole-state snapshot like any other, the pulse also
+repairs anything a browser managed to miss. It is skipped when nobody is
+watching.
+
+**The session is askable.** `GET /api/session` answers 200 or 401 for the
+cookie presented. The WebSocket API reports a refused upgrade and an engine
+that isn't listening identically — a bare close — but the Operator's next move
+differs completely: Console Sessions live in engine memory, so a restart has
+forgotten every one of them and the answer is the password box, whereas an
+engine that is merely down wants patience. A browser whose socket closes without
+ever having opened asks here before deciding which.
+
+Neither is a new state to keep: the keepalive is a task started with the server
+and cancelled with it, and the probe is the existing session check with a status
+code on it.
 
 ## The Fake PBX
 

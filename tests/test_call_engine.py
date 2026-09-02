@@ -641,3 +641,112 @@ def test_a_hangup_on_another_channel_does_not_touch_the_live_call(tmp_path: Path
         return gone
 
     assert asyncio.run(run()) is False
+
+
+# -- live progress off the CallObserver seam, through the real thread hop (#37)
+#
+# The unit tests in tests/test_call_observer.py drive the observer against a
+# hand-made loop. These drive the wiring: a real call, in a real worker thread,
+# emitting through the real `EngineCallObserver` into the session the Console
+# reads. `GatedPBX` parks the caller mid-attempt so the state can be read while
+# the call is genuinely in flight rather than after it.
+
+
+def test_a_live_call_reports_the_attempt_it_is_on(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = GatedPBX(entry="1234")
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        # Parked inside read_digits, so the flow has announced attempt 1 and is
+        # waiting on the caller — exactly what the Operator would be watching.
+        await _settle()
+
+        session = engine.active_session
+        assert session is not None
+        assert session.current_attempt == 1
+        assert session.attempt_limit == 3
+        assert session.attempts == 0, "the final count is not known until the handler returns"
+
+        ari.release.set()
+        await engine.wait_for_idle()
+        return engine
+
+    engine = asyncio.run(run())
+    assert engine is not None
+
+
+def test_a_live_roguelike_call_reports_where_in_the_maze_the_caller_is(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = GatedPBX(entry="1")
+        engine, _store = await _engine(tmp_path, ari, mode="roguelike", code="0000")
+        await ari.fire_stasis_start("chan-1")
+        await _settle()
+
+        session = engine.active_session
+        assert session is not None
+        assert session.node is not None
+        assert (session.node.index, session.node.depth) == (0, 0), "parked at the mouth"
+
+        ari.release.set()
+        await engine.wait_for_idle()
+        return engine.active_session
+
+    asyncio.run(run())
+
+
+def test_a_live_puzzle_call_reports_which_riddle_was_drawn(tmp_path: Path) -> None:
+    async def run() -> Any:
+        _seed_puzzle_pool(tmp_path)
+        ari = GatedPBX(entry="4242")
+        engine, _store = await _engine(tmp_path, ari, mode="puzzle", code="4242", attempt_limit=3)
+        await ari.fire_stasis_start("chan-1")
+        await _settle()
+
+        session = engine.active_session
+        assert session is not None
+        assert session.puzzle_id == "riddle-001.wav"
+
+        ari.release.set()
+        await engine.wait_for_idle()
+        return engine.active_session
+
+    asyncio.run(run())
+
+
+def test_live_progress_reaches_the_console_as_it_happens(tmp_path: Path) -> None:
+    """The whole point: the change hook fires, so a browser is told mid-call.
+
+    Without this the fields would be correct in memory and invisible on screen —
+    the snapshot is only built when something announces that state moved.
+    """
+
+    async def run() -> Any:
+        ari = GatedPBX(entry="1234")
+        engine, _store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+
+        seen: list[int | None] = []
+        engine.on_change(lambda: seen.append(_attempt_of(engine)))
+
+        await ari.fire_stasis_start("chan-1")
+        await _settle()
+        ari.release.set()
+        await engine.wait_for_idle()
+        return seen
+
+    seen = asyncio.run(run())
+    assert 1 in seen, f"the Console was never told which attempt the caller was on: {seen}"
+
+
+def _attempt_of(engine: CallEngine) -> int | None:
+    session = engine.active_session
+    return None if session is None else session.current_attempt
+
+
+async def _settle() -> None:
+    """Let the call task reach the parked read, and its emissions reach the loop.
+
+    The observer hops to the loop with `call_soon_threadsafe`, so the write lands
+    a tick after the worker thread makes it; a bare `sleep(0)` can miss it.
+    """
+    for _ in range(20):
+        await asyncio.sleep(0.01)

@@ -45,9 +45,14 @@ def _session(
     )
 
 
-def test_schema_version_is_two() -> None:
-    """#36 added the state vocabulary and the live digits to the call view."""
-    assert SNAPSHOT_SCHEMA_VERSION == 2
+def test_schema_version_is_three() -> None:
+    """#37 added the live progress — attempt, node, puzzle — to the call view.
+
+    The number is asserted rather than merely mirrored so that widening the wire
+    shape without bumping it fails here, where the browser's own
+    `SNAPSHOT_SCHEMA_VERSION` is the thing that would otherwise silently drift.
+    """
+    assert SNAPSHOT_SCHEMA_VERSION == 3
 
 
 def test_idle_snapshot_has_no_call() -> None:
@@ -162,3 +167,76 @@ def test_a_dropped_call_says_so_rather_than_passing_for_a_hangup() -> None:
     call = build_snapshot(_config(), session)["call"]
     assert call["state"] == "dropped"
     assert call["outcome"] is None
+
+
+# -- live progress off the CallObserver seam (#37) ---------------------------
+
+
+def _config_limited(attempt_limit: int) -> ConfigSnapshot:
+    """Global Config with a particular Attempt Limit, for the two-limits test."""
+    return ConfigSnapshot(
+        mode="puzzle", code="1234", attempt_limit=attempt_limit, upstream_extension="300"
+    )
+
+
+def test_a_live_call_carries_the_attempt_it_is_on() -> None:
+    """The live counter and the final count are different numbers.
+
+    `attempt` is where the caller is now; `attempts` is what the handler
+    returned, and stays 0 until it does. The Console shows one during the call
+    and the other after it.
+    """
+    session = _session(attempts=0)
+    session.begin_attempt(2, 3)
+    call = build_snapshot(_config(), session)["call"]
+    assert call["attempt"] == 2
+    assert call["attempt_limit"] == 3
+    assert call["attempts"] == 0
+
+
+def test_the_attempt_limit_shown_is_the_one_this_call_is_judged_against() -> None:
+    """Not Global Config's, which an Operator may have changed mid-call.
+
+    The booth is set to 1 now; the caller on the line picked up when it was 5
+    and is being judged against 5. Showing the top bar's number on the call
+    panel would tell the Operator this caller is one wrong answer from Exile
+    when they in fact have four left.
+    """
+    session = _session()
+    session.begin_attempt(1, 5)
+    snapshot = build_snapshot(_config_limited(1), session)
+    assert snapshot["config"]["attempt_limit"] == 1
+    assert snapshot["call"]["attempt_limit"] == 5
+
+
+def test_the_limit_is_known_before_the_first_attempt() -> None:
+    """"Attempt — of 4" beats "attempt — of —" while the call is answering."""
+    session = _session(config=_config_limited(4))
+    call = build_snapshot(_config(), session)["call"]
+    assert call["attempt"] is None
+    assert call["attempt_limit"] == 4
+
+
+def test_a_roguelike_call_carries_the_room_the_caller_is_in() -> None:
+    session = _session()
+    session.enter_node(7, 3, False)
+    call = build_snapshot(_config(), session)["call"]
+    assert call["node"] == {"index": 7, "depth": 3, "terminal": False}
+
+    session.enter_node(5, 4, True)
+    call = build_snapshot(_config(), session)["call"]
+    assert call["node"]["terminal"] is True
+
+
+def test_a_puzzle_call_carries_the_riddle_the_caller_got() -> None:
+    session = _session()
+    session.select_puzzle("riddle-07.wav")
+    assert build_snapshot(_config(), session)["call"]["puzzle_id"] == "riddle-07.wav"
+
+
+def test_a_call_with_no_progress_yet_carries_none_of_it() -> None:
+    """A tweeted call has no maze and no riddle; it must not invent either."""
+    call = build_snapshot(_config(), _session())["call"]
+    assert call["attempt"] is None
+    assert call["node"] is None
+    assert call["puzzle_id"] is None

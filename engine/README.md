@@ -27,6 +27,9 @@ blocking AGI scripts. See ADR-0001 and epic #13.
   `CallRecord`.
 - `call_engine.py` — `CallEngine`: the Phase 1 skeleton. Owns the ARI event
   loop; on each `StasisStart` runs one Call Session end-to-end and persists it.
+- `call_observer.py` — `EngineCallObserver`: the engine's `core.CallObserver`.
+  Carries the flow's live progress from the worker thread to the live session,
+  on the event loop. See below.
 - `console.py` — `ConsoleServer`: the Operator Console's server. Serves the
   built bundle from `web/dist`, gates it behind the shared password, and pushes
   whole-state snapshots to every attached browser over `/ws/telemetry`.
@@ -116,6 +119,50 @@ read, and because a broadcast builds its snapshot when it runs, the idle state
 could otherwise overwrite the win before either was sent. It is display only —
 `is_over` is what the busy check consults, so the next caller is accepted the
 instant the call ends, afterglow or not.
+
+## Live progress: the CallObserver seam (#37)
+
+Everything in the previous section is observed from ARI events. Three things
+are not, because they are computed inside `core.flow` and the flow returns
+exactly once, at the terminal outcome: **which attempt of how many** the caller
+is on, **which room of the maze** they are in, and **which riddle** they drew
+from the Puzzle Pool. `core.CallObserver` is the way out, and
+`EngineCallObserver` is this side of it.
+
+**The session is only ever mutated on the event loop.** That is the invariant,
+and the reason this class exists rather than the flow writing to the session
+directly. `core.flow` runs in a worker thread; the Console reads the session on
+the loop. Every other write — the digits from `ChannelDtmfReceived`, the state
+changes, `complete()` — is already made on the loop, so keeping these there too
+means the whole live state is single-threaded and a snapshot can never be built
+from a session caught half-written: one moment's attempt count beside another
+moment's node. The observer hands the loop a closure and returns immediately —
+the mirror image of the hop `ARICallIO` makes in the other direction, except
+that one *blocks* the worker on the result because the caller is waiting on a
+prompt, and this one does not because nobody is waiting on a cockpit update.
+
+**An observer belongs to one call and writes to no other.** The flow runs in a
+thread the engine does not join, and `_handle_call`'s `finally:` frees the slot
+without waiting for it — so a caller who hangs up while the flow sits in a
+thirty-second `read_digits` leaves that thread alive and still emitting. By the
+time the loop runs the closure the booth may have a different caller on the
+line. So each observer holds the session it was made for and checks it is still
+the one being shown before writing: the same identity check `_clear` makes
+before dropping a finished call, and `_on_dtmf` makes on the channel id. Without
+it, one caller's attempt count lands on the next caller's panel.
+
+**Nothing here is worth a call.** These emissions sit directly in the path of a
+live caller's attempt, so a closed loop (shutdown racing the last emission) and
+a change listener that throws (a browser socket that died) are both logged and
+swallowed rather than raised.
+
+**Two Attempt Limits, and they are not the same number.** The snapshot's
+`config.attempt_limit` is Global Config — what the booth is set to now. The
+call's `attempt_limit` came off its frozen Config Snapshot and is what the
+caller on the line is actually being judged against. They differ for the length
+of any call in progress when an Operator changes the setting, and showing the
+first on the call panel would tell the Operator a caller is one wrong answer
+from Exile when they have three left.
 
 ## The Operator Console
 

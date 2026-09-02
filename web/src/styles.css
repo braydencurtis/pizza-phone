@@ -279,6 +279,47 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.call-facts .attempt {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The last attempt is the one before Exile. It reads differently because that
+   is the moment an Operator might want to be watching. */
+.call-facts .attempt-last {
+  color: var(--warn);
+}
+
+.call-facts .of {
+  color: var(--dim);
+  font-size: 0.9em;
+}
+
+.call-facts .puzzle {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.95rem;
+}
+
+/* -- the maze ------------------------------------------------------------- */
+
+.maze {
+  margin-top: 1.5rem !important;
+  font-size: 0.95rem;
+}
+
+/* The tree is regenerated per Call Session, so the index is a coordinate on a
+   map only this call has: kept for debugging, sized so it never competes with
+   the depth, which is the part that means something. */
+.maze .node-index {
+  font-size: 0.8em;
+  opacity: 0.6;
+}
+
+/* Reaching the leaf is the cue that the caller is about to be given the Code. */
+.maze-leaf {
+  color: var(--live) !important;
+  font-weight: 600;
+}
+
 .digits {
   display: flex;
   justify-content: center;

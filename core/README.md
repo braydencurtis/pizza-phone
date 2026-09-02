@@ -1,14 +1,19 @@
 # core
 
 Channel-agnostic game logic. `core/` never imports a channel driver (ARI, or the
-retired AGI scripts); it reaches the outside world only through the `CallIO`
-protocol. That seam is what let the same logic run under the AGI scripts and now
-the ARI Call Engine (epic #13) — the driver changed, this code did not.
+retired AGI scripts); it reaches the outside world through two protocols and
+nothing else: `CallIO` to talk to the **caller**, and `CallObserver` to tell the
+**Operator** what is happening. The first is what let the same logic run under
+the AGI scripts and now the ARI Call Engine (epic #13) — the driver changed,
+this code did not.
 
 ## Modules
 
-- `call_io.py` — `CallIO` protocol: the one seam a driver implements
-  (`play`, `read_dtmf`, `speak`, `hangup`, `to_success`).
+- `call_io.py` — `CallIO` protocol: the seam a driver implements to reach the
+  caller (`play`, `read_dtmf`, `speak`, `hangup`, `to_success`).
+- `observer.py` — `CallObserver` protocol: the seam a driver implements to reach
+  the Operator (`attempt_started`, `node_entered`, `puzzle_selected`). Optional
+  everywhere; defaults to `NULL_OBSERVER`.
 - `flow.py` — interactive per-mode Call Session flow (`run_tweeted`,
   `run_puzzle`, `run_roguelike`), driven entirely through `CallIO`.
 - `config.py` — Global Config: the `ConfigSnapshot` a Call Session is judged
@@ -36,3 +41,28 @@ the snapshot and `core.flow` reads the Code and Attempt Limit off it, so the
 digits collected and the digits judged always come from the same config. Writes
 go through `config.write_config`, which replaces the file atomically — a call
 taking its snapshot mid-write can never read a truncated file. See issue #34.
+
+## The two seams
+
+`CallIO` and `CallObserver` are deliberately separate, and ADR-0003 is the
+argument for it. The cheap alternative was a `progress()` method on `CallIO`,
+but its five methods are all *talk to the caller* while telemetry is *talk to
+the Operator*; conflating two audiences on the seam whose smallness is the whole
+reason this code outlived its driver would be a poor trade for one fewer file.
+
+The observer exists because the `run_*` functions return exactly once, at the
+terminal outcome. Everything the cockpit wants to show *during* a call is
+computed inside them and otherwise never escapes: which attempt of how many
+(`_run_code_entry`'s loop counter), which room of the maze
+(`mode_roguelike.handle`), which riddle was drawn from the Puzzle Pool.
+
+It stays optional — every flow function defaults to `NULL_OBSERVER`, a shared
+do-nothing instance — so `core/` remains usable and testable with no observer at
+all, and so the emission sites need no null check to forget at the next one.
+
+Two obligations fall on whoever implements it, both because these calls sit
+directly in the path of a live caller's attempt: **do not raise** (telemetry is
+never worth a call) and **do not block** (the caller is on the phone). The
+engine's implementation, `engine/call_observer.py`, also has a third: it is
+called from the worker thread running the flow, so it marshals onto the event
+loop rather than touching live state itself.

@@ -53,6 +53,7 @@ from engine.ari_client import (
     STASIS_START,
     ARIClient,
 )
+from engine.call_observer import EngineCallObserver
 from engine.call_session import CallSession
 from engine.call_store import CallStore, new_session_id
 
@@ -320,6 +321,10 @@ class CallEngine:
         because ``core.flow`` is blocking and every ``ARICallIO`` call hops back
         to the loop. Same per-mode dispatch the retired AGI entry point ran,
         with ARI media names.
+
+        Two seams go in here, pointing opposite ways: ``ARICallIO`` carries the
+        game's words *to the caller*, and ``EngineCallObserver`` carries its
+        progress *to the Operator* (#37). Keeping them apart is ADR-0003.
         """
         assert self._loop is not None  # set in start(), before any call runs
         config = session.config
@@ -333,6 +338,12 @@ class CallEngine:
             upstream_ext=config.upstream_extension,
             tts=self._tts,
         )
+        # Bound to *this* session, and checked against the live one at write
+        # time: this thread outlives a call the engine tore down, and by then
+        # the slot may hold somebody else. See engine/call_observer.py.
+        observer = EngineCallObserver(
+            self._loop, session, lambda: self.active_session, self._notify_change
+        )
 
         if config.mode == "tweeted":
             return flow.run_tweeted(
@@ -340,18 +351,22 @@ class CallEngine:
                 router,
                 exile_media=EXILE_MEDIA,
                 wrong_media=WRONG_MEDIA,
+                observer=observer,
             )
         if config.mode == "puzzle":
-            return self._run_puzzle(io, router)
+            return self._run_puzzle(io, router, observer)
         if config.mode == "roguelike":
-            return flow.run_roguelike(io, router)
+            return flow.run_roguelike(io, router, observer=observer)
         raise ValueError(f"Unknown mode: {config.mode!r}")
 
-    def _run_puzzle(self, io: ARICallIO, router: Router) -> dict[str, Any]:
+    def _run_puzzle(
+        self, io: ARICallIO, router: Router, observer: EngineCallObserver
+    ) -> dict[str, Any]:
         """Pick a puzzle from the pool and run the puzzle flow.
 
         Selection is core; resolving the chosen WAV to an ARI ``sound:`` URI is
-        engine-specific, so it stays here.
+        engine-specific, so it stays here. Which puzzle was drawn is announced
+        by the flow, not here, so the emission sits at the seam the tests drive.
         """
         puzzle_path = PuzzleSelector(self._audio_dir / "puzzles").pick()
         return flow.run_puzzle(
@@ -361,6 +376,7 @@ class CallEngine:
             prompt_media=sound_uri(puzzle_path),
             exile_media=EXILE_MEDIA,
             wrong_media=WRONG_MEDIA,
+            observer=observer,
         )
 
     async def _safe_hangup(self, channel_id: str) -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import random
 from typing import Protocol, TypedDict, TypeGuard, cast
 
+from core.observer import NULL_OBSERVER, CallObserver
+
 
 class RoguelikeContext(Protocol):
     def speak(self, text: str) -> None: ...
@@ -78,7 +80,13 @@ def make_tree(seed: int | None = None) -> list[Node]:
     return tree
 
 
-def handle(ctx: RoguelikeContext, code: str, seed: int | None = None, max_depth: int = 20) -> dict[str, list[str] | list[int]]:
+def handle(
+    ctx: RoguelikeContext,
+    code: str,
+    seed: int | None = None,
+    max_depth: int = 20,
+    observer: CallObserver = NULL_OBSERVER,
+) -> dict[str, list[str] | list[int]]:
     tree = make_tree(seed=seed)
     path: list[str] = []
     nodes_visited: list[int] = []
@@ -86,10 +94,18 @@ def handle(ctx: RoguelikeContext, code: str, seed: int | None = None, max_depth:
 
     while len(path) < max_depth:
         node = tree[idx]
+        terminal = _is_terminal(node)
+        # Depth is the moves *made* — `len(path)`, not the times round this
+        # loop. An unrecognised key replays the node without advancing, and
+        # counting that would show the Operator a caller descending steadily
+        # through a maze they are in fact stuck in. The index is carried too,
+        # but means nothing outside this call: the tree is regenerated per Call
+        # Session.
+        observer.node_entered(idx, len(path), terminal)
         nodes_visited.append(idx)
         ctx.speak(node["text"])
 
-        if _is_terminal(node):
+        if terminal:
             ctx.speak(f"The code is {code}. Hang up and dial it now.")
             return {"path": path, "nodes_visited": nodes_visited}
 

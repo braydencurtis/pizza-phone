@@ -7,8 +7,8 @@
  * talking to instead of quietly rendering nonsense.
  */
 
-/** 2: the call view gained its state vocabulary, live digits and `ended_at`. */
-export const SNAPSHOT_SCHEMA_VERSION = 2;
+/** 3: the call view gained its live progress — attempt, node, puzzle (#37). */
+export const SNAPSHOT_SCHEMA_VERSION = 3;
 
 export type Mode = "tweeted" | "puzzle" | "roguelike";
 export type Outcome = "succeed" | "fail" | "exile" | "hangup";
@@ -41,8 +41,24 @@ export const TERMINAL_STATES: ReadonlySet<CallState> = new Set<CallState>([
 export interface ConfigView {
   mode: Mode;
   code: string;
+  /**
+   * The booth's Attempt Limit *now*. Not the one the live caller is judged
+   * against — that is `CallView.attempt_limit`, off their frozen Config
+   * Snapshot, and the two differ for the length of any call in progress when
+   * an Operator changes the setting.
+   */
   attempt_limit: number;
   upstream_extension: string;
+}
+
+/** Where the caller has got to in the Roguelike Phone-Tree. */
+export interface NodeView {
+  /** Index into a tree regenerated for this Call Session — meaningless elsewhere. */
+  index: number;
+  /** Rooms walked through. The readable half of a position. */
+  depth: number;
+  /** The leaf: where the Code is read aloud. */
+  terminal: boolean;
 }
 
 /** The live Call Session, as much of it as the engine knows so far. */
@@ -57,6 +73,19 @@ export interface CallView {
   ended_at: string | null;
   /** The most recent digits dialled, oldest dropped past the engine's cap. */
   digits: string;
+  /**
+   * Which attempt the caller is on right now, or `null` before the first.
+   *
+   * Distinct from `attempts`, which is the *final* count and stays 0 until the
+   * mode handler returns. One is shown during the call and the other after it.
+   */
+  attempt: number | null;
+  /** The Attempt Limit **this call** is judged against, off its Config Snapshot. */
+  attempt_limit: number | null;
+  /** `null` unless this is a Roguelike Phone-Tree session. */
+  node: NodeView | null;
+  /** The riddle drawn from the Puzzle Pool; `null` outside Audio Puzzle Mode. */
+  puzzle_id: string | null;
   attempts: number;
   outcome: Outcome | null;
 }

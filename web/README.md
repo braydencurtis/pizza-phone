@@ -71,9 +71,21 @@ the Call Engine for the success dialplan, so nobody mistakes the silence that
 follows for the story ending. A hangup is dashed and grey. A dashboard that
 blurred those two would be a dashboard the Operator stops believing.
 
-The attempt counter appears only once the call is over: the engine learns it
-when the mode handler returns, so a live call would show a permanent `0` and
-then jump. A live counter arrives with the `CallObserver` seam.
+The attempt counter now counts up *during* the call — "attempt 2 of 3" — off
+the `CallObserver` seam (#37), and settles after it to the final count the
+handler returned. **The limit shown is the call's, not the top bar's**: the top
+bar is Global Config as it stands now, while the caller on the line is judged
+against the Config Snapshot they picked up with. An Operator who rotated the
+Attempt Limit mid-call would otherwise read the panel as saying this caller is
+one wrong answer from Exile when they have three left.
+
+A Roguelike session also shows how deep in the maze the caller has walked —
+moves *made*, so an unrecognised key that replays a room does not read as
+descent — and calls out the leaf — where the Code is read aloud, and the Operator's cue that
+the caller is about to hang up and dial in. Depth rather than the node index is
+the headline: the tree is regenerated per Call Session, so the index is a
+coordinate on a map only this call has. An Audio Puzzle session names the riddle
+that was drawn from the Puzzle Pool.
 
 The timer is advanced here, not by the engine: snapshots carry the call's start
 time (and its end, once it is over), so a live call costs one message per event

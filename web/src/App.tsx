@@ -28,7 +28,7 @@ import {
   STATE_COPY,
   TERMINAL_STATES,
 } from "./snapshot";
-import type { CallView, ConfigView } from "./snapshot";
+import type { CallView, ConfigView, NodeView } from "./snapshot";
 import { useTelemetry } from "./telemetry";
 import type { Connection, Telemetry } from "./telemetry";
 
@@ -241,17 +241,15 @@ function LiveCall({ call, stale }: { call: CallView; stale: boolean }) {
           <dt>{stale && !over ? "Ran to" : over ? "Lasted" : "Elapsed"}</dt>
           <dd className="elapsed">{formatElapsed(elapsed)}</dd>
         </div>
-        {/* The engine only learns the attempt count when the mode handler
-            returns, so a live call would show a permanent 0 and then jump — a
-            stale display of exactly the kind ADR-0003 rejects deltas to avoid.
-            The live counter arrives with the CallObserver seam. */}
-        {over && (
+        <Attempts call={call} over={over} />
+        {call.puzzle_id !== null && (
           <div>
-            <dt>Attempts</dt>
-            <dd>{call.attempts}</dd>
+            <dt>Puzzle</dt>
+            <dd className="puzzle">{call.puzzle_id}</dd>
           </div>
         )}
       </dl>
+      {call.node !== null && <Maze node={call.node} />}
       <Digits digits={call.digits} />
       <p className="state-note">
         {stale && !over
@@ -260,6 +258,64 @@ function LiveCall({ call, stale }: { call: CallView; stale: boolean }) {
       </p>
       <p className="session">{call.session_id}</p>
     </section>
+  );
+}
+
+/**
+ * How close the caller is to Exile.
+ *
+ * The limit is the *call's* — off the Config Snapshot it picked up with — not
+ * the top bar's, which is what the booth is set to now. An Operator who rotated
+ * the Attempt Limit mid-call would otherwise read this panel as saying the
+ * caller on the line is one wrong answer from Exile when they have three left.
+ *
+ * During the call it counts up; afterwards it settles to what the handler
+ * actually returned, which is the number that was logged.
+ */
+function Attempts({ call, over }: { call: CallView; over: boolean }) {
+  if (over) {
+    return (
+      <div>
+        <dt>Attempts</dt>
+        <dd>{call.attempts}</dd>
+      </div>
+    );
+  }
+  if (call.attempt_limit === null) return null;
+
+  const attempt = call.attempt;
+  const last = attempt !== null && attempt >= call.attempt_limit;
+  return (
+    <div>
+      <dt>Attempt</dt>
+      <dd className={last ? "attempt attempt-last" : "attempt"}>
+        {attempt ?? "—"} <span className="of">of {call.attempt_limit}</span>
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * Where the caller is in the maze.
+ *
+ * Depth, not the node index: the tree is regenerated per Call Session, so the
+ * index is a coordinate on a map only this call has, and the number that means
+ * anything to a watching Operator is how many rooms deep they have walked. The
+ * leaf gets its own treatment because it is the moment the Code is read aloud —
+ * the Operator's cue that the caller is about to hang up and dial in.
+ */
+function Maze({ node }: { node: NodeView }) {
+  return (
+    <p className={node.terminal ? "maze maze-leaf" : "maze"}>
+      {node.terminal ? (
+        <>The voice is reading them the Code — room {node.depth} deep.</>
+      ) : (
+        <>
+          {node.depth === 0 ? "At the mouth of the maze" : `${node.depth} rooms deep`}
+          <span className="node-index"> · node {node.index}</span>
+        </>
+      )}
+    </p>
   );
 }
 

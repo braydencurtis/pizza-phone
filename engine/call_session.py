@@ -60,6 +60,20 @@ _STATE_BY_OUTCOME: dict[Outcome, CallState] = {
 MAX_LIVE_DIGITS = 16
 
 
+@dataclass(frozen=True)
+class MazePosition:
+    """Where a caller stands in the Roguelike Phone-Tree.
+
+    ``depth`` is the readable half — rooms walked through — and ``index`` is a
+    coordinate on a map only this call has, since the tree is regenerated per
+    Call Session. ``terminal`` is the leaf, where the Code is read aloud.
+    """
+
+    index: int
+    depth: int
+    terminal: bool
+
+
 @dataclass
 class CallSession:
     """One live Call Session, from pickup to terminal outcome.
@@ -81,6 +95,15 @@ class CallSession:
     state: CallState = "answering"
     digits: list[str] = field(default_factory=list)
     caller_gone: bool = False
+    # The live progress the CallObserver reports mid-call (#37). ``attempts``
+    # below is the *final* count, learned only when the handler returns;
+    # ``current_attempt`` is where the caller is right now. The two are
+    # deliberately separate — a cockpit reading the final count mid-call would
+    # show a permanent 0 and then jump.
+    current_attempt: int | None = None
+    attempt_limit: int | None = None
+    node: MazePosition | None = None
+    puzzle_id: str | None = None
     outcome: Outcome | None = None
     attempts: int = 0
     ended_at: datetime | None = None
@@ -99,6 +122,24 @@ class CallSession:
     def enter_mode(self) -> None:
         """The channel is answered and the mode handler is about to run."""
         self.state = "in_mode"
+
+    def begin_attempt(self, attempt: int, limit: int) -> None:
+        """The caller is being asked for their ``attempt``-th answer.
+
+        The limit is stored rather than read back off ``config`` so the Console
+        shows the number the flow actually judged against, not one re-derived
+        from a snapshot that might drift from it.
+        """
+        self.current_attempt = attempt
+        self.attempt_limit = limit
+
+    def enter_node(self, index: int, depth: int, terminal: bool) -> None:
+        """The caller has walked into a room of the Roguelike Phone-Tree."""
+        self.node = MazePosition(index=index, depth=depth, terminal=terminal)
+
+    def select_puzzle(self, puzzle_id: str) -> None:
+        """This Call Session drew ``puzzle_id`` from the Puzzle Pool."""
+        self.puzzle_id = puzzle_id
 
     def record_digit(self, digit: str) -> None:
         """Note a DTMF digit as the caller dials it, oldest dropped past the cap."""

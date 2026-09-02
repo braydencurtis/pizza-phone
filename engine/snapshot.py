@@ -10,6 +10,13 @@ console tell an old shape from a new one without guessing.
 The live call carries ``started_at`` and (once over) ``ended_at``, never a
 duration: the browser advances the elapsed clock itself, so a call on the line
 does not generate a message per second purely to tick a timer (ADR-0003).
+
+Note the two Attempt Limits, which are not the same number. The one under
+``config`` is Global Config — what the booth is set to *now*. The one under
+``call`` came off this call's frozen Config Snapshot, and is what the caller on
+the line is actually being judged against. They differ for the length of any
+call in progress when an Operator changes the setting, and the Console must
+never show the first in place of the second.
 """
 
 from __future__ import annotations
@@ -21,8 +28,10 @@ from core.types import Mode
 from engine.call_session import CallSession
 
 # 2: the live Call Session gained its state vocabulary, the digits the caller is
-# dialling, and the moment a finished call ended (#36).
-SNAPSHOT_SCHEMA_VERSION = 2
+#    dialling, and the moment a finished call ended (#36).
+# 3: …and its live progress — which attempt of how many, which room of the maze,
+#    which riddle — off the CallObserver seam (#37).
+SNAPSHOT_SCHEMA_VERSION = 3
 
 
 def build_snapshot(config: ConfigSnapshot, session: CallSession | None) -> dict[str, Any]:
@@ -61,6 +70,41 @@ def _call_view(session: CallSession | None) -> dict[str, Any] | None:
         # elapsed clock where the call stopped rather than at "now".
         "ended_at": session.ended_at.isoformat() if session.ended_at else None,
         "digits": "".join(session.digits),
+        # Where the caller is *now*: which attempt of how many they are on.
+        # ``attempts`` below is the final count, and stays 0 until the handler
+        # returns — the Console shows one during the call and the other after.
+        "attempt": session.current_attempt,
+        "attempt_limit": _attempt_limit(session),
+        "node": _node_view(session),
+        "puzzle_id": session.puzzle_id,
         "attempts": session.attempts,
         "outcome": session.outcome,
     }
+
+
+def _attempt_limit(session: CallSession) -> int | None:
+    """The Attempt Limit *this call* is judged against.
+
+    Reported by the flow as each attempt starts, so it is the number actually
+    used. Before the first attempt there is nothing to report but the Config
+    Snapshot, which is the same number the flow will use — an Operator watching
+    a call answer should see "of 3" straight away, not a dash that fills in only
+    once the caller dials.
+    """
+    if session.attempt_limit is not None:
+        return session.attempt_limit
+    return session.config.attempt_limit if session.config is not None else None
+
+
+def _node_view(session: CallSession) -> dict[str, Any] | None:
+    """Where the caller has got to in the Roguelike Phone-Tree, if anywhere.
+
+    The index is carried for completeness, but ``depth`` is the readable part:
+    the tree is regenerated per Call Session, so the index is a coordinate on a
+    map only this call has. ``terminal`` is the leaf — where the Code is read
+    aloud — which is the one position worth spotting from across a room.
+    """
+    node = session.node
+    if node is None:
+        return None
+    return {"index": node.index, "depth": node.depth, "terminal": node.terminal}

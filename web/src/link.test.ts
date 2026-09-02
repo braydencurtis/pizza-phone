@@ -18,7 +18,7 @@ const CLOSED = 3;
 
 function snapshot(code: string, sessionId: string | null = null): Snapshot {
   return {
-    schema: 2,
+    schema: 3,
     config: { mode: "tweeted", code, attempt_limit: 3, upstream_extension: "300" },
     call:
       sessionId === null
@@ -31,6 +31,10 @@ function snapshot(code: string, sessionId: string | null = null): Snapshot {
             started_at: "2026-09-01T12:00:00+00:00",
             ended_at: null,
             digits: "",
+            attempt: null,
+            attempt_limit: 3,
+            node: null,
+            puzzle_id: null,
             attempts: 0,
             outcome: null,
           },

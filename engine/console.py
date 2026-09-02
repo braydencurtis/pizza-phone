@@ -24,6 +24,12 @@ is set to *now* — not what the live call is being judged against, which is tha
 call's frozen Config Snapshot. Reading the file each time is what makes an
 Operator's write (`tools/rotate.py` today, the Console in #38) show up here
 without the engine holding a cached copy that can go stale.
+
+**The socket is never silent, and the session is askable** (#40). The browser
+owns reconnection; this side owes it two affordances to do that honestly — a
+keepalive snapshot, so silence on the wire means a dead connection rather than a
+quiet booth, and ``/api/session``, which answers the question a refused
+WebSocket upgrade cannot. See ``engine/README.md``, "Reconnection".
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ import contextlib
 import logging
 import mimetypes
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -54,6 +60,20 @@ SESSION_COOKIE = "pizza_console"
 SESSION_TTL = timedelta(hours=12)
 
 TELEMETRY_PATH = "/ws/telemetry"
+
+# How often a snapshot goes out regardless of whether anything changed (#40).
+# The Console treats a longer silence than this as a dead socket, so the pulse
+# is what makes "nothing is happening" distinguishable from "nothing is there".
+# Being a whole-state snapshot like any other, it also repairs a browser that
+# somehow missed one. Cheap at this size: the console's entire state is a few
+# hundred bytes, a handful of times a minute, to a handful of laptops.
+KEEPALIVE = timedelta(seconds=20)
+
+# How long one browser may take to accept a snapshot before it is dropped.
+# Sends go out concurrently, but a socket whose TCP window has closed — a
+# laptop asleep or carried out of range — would still hold the broadcast lock,
+# and with it everyone else's view of the live call, for as long as it liked.
+BROADCAST_TIMEOUT_S = 5.0
 
 # The three types the built bundle is made of, spelled out rather than left to
 # the platform: a Mac and a Debian box disagree about ``.js``, and a browser
@@ -151,6 +171,8 @@ class ConsoleServer:
         host: str,
         port: int,
         session_ttl: timedelta = SESSION_TTL,
+        keepalive: timedelta = KEEPALIVE,
+        broadcast_timeout_s: float = BROADCAST_TIMEOUT_S,
     ) -> None:
         self._engine = engine
         self._password = password
@@ -159,19 +181,23 @@ class ConsoleServer:
         self._host = host
         self._requested_port = port
         self._sessions = SessionStore(ttl=session_ttl)
+        self._keepalive = keepalive
+        self._broadcast_timeout_s = broadcast_timeout_s
 
         self._app = self._build_app()
         self._runner: web.AppRunner | None = None
         self._bound_port: int | None = None
         self._sockets: set[web.WebSocketResponse] = set()
-        # Broadcasts are spawned from a synchronous engine callback, so the
-        # tasks need an owner or the loop may garbage-collect one mid-send.
-        self._broadcasts: set[asyncio.Task[None]] = set()
+        # Background work — broadcasts, and closing sockets we have given up
+        # on — is spawned from synchronous callers, so the tasks need an owner
+        # or the loop may garbage-collect one mid-flight.
+        self._tasks: set[asyncio.Task[None]] = set()
         # One broadcast at a time, so two changes in quick succession reach
         # every browser in the order they happened.
         self._broadcast_lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._unsubscribe: Callable[[], None] | None = None
+        self._pulse: asyncio.Task[None] | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -196,6 +222,7 @@ class ConsoleServer:
         await site.start()
         self._bound_port = _bound_port(self._runner)
         self._unsubscribe = self._engine.on_change(self._on_engine_change)
+        self._pulse = asyncio.create_task(self._keep_alive())
         logger.info("Operator Console on http://%s:%d", self._host, self._bound_port)
 
     async def stop(self) -> None:
@@ -208,11 +235,14 @@ class ConsoleServer:
         if self._unsubscribe is not None:
             self._unsubscribe()
             self._unsubscribe = None
+        if self._pulse is not None:
+            self._pulse.cancel()
+            self._pulse = None
         for ws in list(self._sockets):
             with contextlib.suppress(Exception):
                 await ws.close()
         self._sockets.clear()
-        for task in list(self._broadcasts):
+        for task in list(self._tasks):
             task.cancel()
         if self._runner is not None:
             await self._runner.cleanup()
@@ -225,6 +255,7 @@ class ConsoleServer:
         app = web.Application()
         app.router.add_post("/api/login", self._handle_login)
         app.router.add_post("/api/logout", self._handle_logout)
+        app.router.add_get("/api/session", self._handle_session)
         app.router.add_get(TELEMETRY_PATH, self._handle_telemetry)
         app.router.add_get("/login", self._handle_login_page)
         app.router.add_get("/assets/{path:.*}", self._handle_asset)
@@ -276,6 +307,20 @@ class ConsoleServer:
         )
         logger.info("Console login from %s", request.remote)
         return response
+
+    async def _handle_session(self, request: web.Request) -> web.Response:
+        """Is this browser still logged in? The reconnection probe (#40).
+
+        A browser whose telemetry socket will not open cannot tell from the
+        WebSocket API *why*: a refused upgrade and an engine that is not
+        listening both arrive as a bare close. The two want opposite responses —
+        an engine restart has forgotten every Console Session, so the Operator
+        needs the password box, while an engine that is merely down wants
+        patience — so the browser asks here, where the status code can say.
+        """
+        if not self._authenticated(request):
+            return web.json_response({"authenticated": False}, status=401)
+        return web.json_response({"authenticated": True})
 
     async def _handle_logout(self, request: web.Request) -> web.Response:
         self._sessions.revoke(request.cookies.get(SESSION_COOKIE))
@@ -361,6 +406,20 @@ class ConsoleServer:
             logger.info("Console detached (%d watching)", len(self._sockets))
         return ws
 
+    async def _keep_alive(self) -> None:
+        """Re-send the current snapshot on a timer, so silence means something.
+
+        The engine otherwise only speaks when something changes, and a browser
+        cannot hear the difference between a booth nobody is calling and a
+        socket that died without closing — which is exactly what a laptop
+        waking from sleep leaves behind. Skipped when nobody is watching.
+        """
+        interval = self._keepalive.total_seconds()
+        while True:
+            await asyncio.sleep(interval)
+            if self._sockets:
+                await self._broadcast()
+
     def _on_engine_change(self) -> None:
         """Engine state moved: push a fresh snapshot to everyone watching.
 
@@ -373,9 +432,7 @@ class ConsoleServer:
         loop.call_soon_threadsafe(self._spawn_broadcast)
 
     def _spawn_broadcast(self) -> None:
-        task = asyncio.create_task(self._broadcast())
-        self._broadcasts.add(task)
-        task.add_done_callback(self._broadcasts.discard)
+        self._spawn(self._broadcast())
 
     async def _broadcast(self) -> None:
         async with self._broadcast_lock:
@@ -387,14 +444,36 @@ class ConsoleServer:
             await self._send_to_all(snapshot)
 
     async def _send_to_all(self, snapshot: dict[str, Any]) -> None:
-        for ws in list(self._sockets):
-            try:
-                await ws.send_json(snapshot)
-            except Exception:
-                # A browser that closed mid-send: drop it and keep going, so
-                # one dead laptop can't stop the rest of the room updating.
-                logger.debug("Dropping a console socket that failed mid-send", exc_info=True)
-                self._sockets.discard(ws)
+        """Snapshot to every browser at once, and nobody waiting on anybody.
+
+        Concurrently and under a deadline, because the Console is a room full of
+        laptops: one that has closed, gone to sleep or been carried out of range
+        must not hold up everyone else's view of the live call. A browser that
+        fails or dawdles is dropped here and closed in the background — the
+        alternative is waiting on its close handshake, which is the stall we
+        just refused to have.
+        """
+        await asyncio.gather(*(self._send_one(ws, snapshot) for ws in list(self._sockets)))
+
+    async def _send_one(self, ws: web.WebSocketResponse, snapshot: dict[str, Any]) -> None:
+        try:
+            # TimeoutError included: it is an Exception, and a browser too slow
+            # to take a snapshot is dropped for the same reason as one that
+            # errored. Cancellation is a BaseException and passes through.
+            await asyncio.wait_for(ws.send_json(snapshot), self._broadcast_timeout_s)
+        except Exception:
+            logger.debug("Dropping a console socket that failed mid-send", exc_info=True)
+            self._sockets.discard(ws)
+            self._spawn(_close_quietly(ws))
+
+    def _spawn(self, coroutine: Coroutine[Any, Any, None]) -> None:
+        """Run a coroutine in the background, holding a reference to its task.
+
+        Without an owner the loop may garbage-collect a task mid-flight.
+        """
+        task = asyncio.create_task(coroutine)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _snapshot(self) -> dict[str, Any] | None:
         """The current console state, or ``None`` if Global Config won't read.
@@ -410,6 +489,12 @@ class ConsoleServer:
             logger.exception("Cannot read Global Config at %s", self._config_path)
             return None
         return build_snapshot(config, self._engine.active_session)
+
+
+async def _close_quietly(ws: web.WebSocketResponse) -> None:
+    """Close a socket we have already given up on, without raising about it."""
+    with contextlib.suppress(Exception):
+        await ws.close()
 
 
 def _bound_port(runner: web.AppRunner) -> int:

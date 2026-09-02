@@ -7,11 +7,19 @@
  * talking to instead of quietly rendering nonsense.
  */
 
-/** 3: the call view gained its live progress — attempt, node, puzzle (#37). */
-export const SNAPSHOT_SCHEMA_VERSION = 3;
+/** 4: a call that ended without a handler outcome now carries one, `dropped` among them (#50). */
+export const SNAPSHOT_SCHEMA_VERSION = 4;
 
 export type Mode = "tweeted" | "puzzle" | "roguelike";
-export type Outcome = "succeed" | "fail" | "exile" | "hangup";
+/**
+ * How a Call Session ended, as the store records it.
+ *
+ * `dropped` is the one no mode handler returns: the engine ended the call
+ * itself after an exception, with the caller still on the line. It is kept out
+ * of `hangup` so a failure of ours is never counted as a caller walking away
+ * (#50).
+ */
+export type Outcome = "succeed" | "fail" | "exile" | "hangup" | "dropped";
 
 /**
  * Where a Call Session has got to.

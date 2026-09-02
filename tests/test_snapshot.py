@@ -45,14 +45,14 @@ def _session(
     )
 
 
-def test_schema_version_is_three() -> None:
-    """#37 added the live progress — attempt, node, puzzle — to the call view.
+def test_schema_version_is_four() -> None:
+    """#50 gave the abandoned endings an outcome, `dropped` among them.
 
     The number is asserted rather than merely mirrored so that widening the wire
     shape without bumping it fails here, where the browser's own
     `SNAPSHOT_SCHEMA_VERSION` is the thing that would otherwise silently drift.
     """
-    assert SNAPSHOT_SCHEMA_VERSION == 3
+    assert SNAPSHOT_SCHEMA_VERSION == 4
 
 
 def test_idle_snapshot_has_no_call() -> None:
@@ -166,7 +166,19 @@ def test_a_dropped_call_says_so_rather_than_passing_for_a_hangup() -> None:
     session.abandon()
     call = build_snapshot(_config(), session)["call"]
     assert call["state"] == "dropped"
-    assert call["outcome"] is None
+    # The synthesised outcome the store gets (#50) reaches the panel too, and
+    # says the same thing the state does rather than the caller's "hangup".
+    assert call["outcome"] == "dropped"
+
+
+def test_a_caller_who_hung_up_mid_call_shows_the_outcome_it_is_stored_under() -> None:
+    """The panel and the past-calls view must not describe one call two ways."""
+    session = _session(config=_config())
+    session.caller_gone = True
+    session.abandon()
+    call = build_snapshot(_config(), session)["call"]
+    assert call["state"] == "hung_up"
+    assert call["outcome"] == "hangup"
 
 
 # -- live progress off the CallObserver seam (#37) ---------------------------

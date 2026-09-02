@@ -66,7 +66,7 @@ def test_to_record_computes_wall_clock_duration() -> None:
 
 
 def test_to_record_before_complete_raises() -> None:
-    with pytest.raises(ValueError, match="not complete"):
+    with pytest.raises(ValueError, match="no ending"):
         _session().to_record()
 
 
@@ -152,3 +152,64 @@ def test_the_digit_buffer_keeps_only_the_most_recent() -> None:
     session.record_digit("7")
     assert len(session.digits) == MAX_LIVE_DIGITS
     assert session.digits[-1] == "7"
+
+
+# -- an ending the mode handler never returned (#50) ---------------------------
+#
+# The mode handler returns exactly once, at a terminal outcome. When the caller
+# puts the handset down mid-playback every following ARI command 404s and it
+# never returns at all — so the ending has to be synthesised here, or the call
+# the Operator just watched leaves no trace in the history.
+
+
+def test_a_caller_who_hung_up_mid_call_is_persistable_as_a_hangup() -> None:
+    session = _session(mode="tweeted")
+    session.caller_gone = True
+    session.abandon()
+
+    assert session.outcome == "hangup"
+    assert session.to_record().outcome == "hangup"
+
+
+def test_an_engine_failure_persists_as_its_own_outcome() -> None:
+    """`dropped` is not a hangup: the caller never chose to end this call."""
+    session = _session(mode="tweeted")
+    session.abandon()
+
+    assert session.outcome == "dropped"
+    assert session.to_record().outcome == "dropped"
+
+
+def test_an_abandoned_call_claims_only_the_attempts_the_caller_finished() -> None:
+    """The same count the tidy path reports: an attempt in flight was not burned."""
+    session = _session(mode="tweeted")
+    session.begin_attempt(2, 3)
+    session.caller_gone = True
+    session.abandon()
+
+    assert session.attempts == 1
+
+
+def test_an_abandoned_walk_counts_the_rooms_it_got_through() -> None:
+    session = _session(mode="roguelike")
+    session.enter_node(index=7, depth=3, terminal=False)
+    session.caller_gone = True
+    session.abandon()
+
+    assert session.attempts == 3
+
+
+def test_an_abandoned_call_that_never_started_claims_nothing() -> None:
+    session = _session(mode="puzzle")
+    session.abandon()
+
+    assert session.attempts == 0
+
+
+def test_a_call_abandoned_before_it_had_a_mode_still_refuses_to_be_a_record() -> None:
+    """No Config Snapshot, no game, nothing honest to write down."""
+    session = _session()
+    session.abandon()
+
+    with pytest.raises(ValueError, match="no ending"):
+        session.to_record()

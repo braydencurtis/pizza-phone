@@ -784,3 +784,131 @@ async def _settle() -> None:
     """
     for _ in range(20):
         await asyncio.sleep(0.01)
+
+
+# -- the history agrees with the panel (#50) ----------------------------------
+#
+# A call that ends on an exception used to be announced to the Console and then
+# forgotten: the cockpit said "hung up" while the store held no row at all, so
+# the two disagreed about a call the Operator had just watched. These drive the
+# whole path — a real call, a real terminal state, a real `CallStore`.
+
+
+class VanishingPBX(FakePBX):
+    """A caller who puts the handset down mid-playback.
+
+    The channel is gone before `play` returns, so this and every later ARI
+    command 404s — which is exactly how the commonest ending there is reaches
+    the engine: as an exception out of the mode handler.
+    """
+
+    async def play(self, channel_id: str, media: str, *, timeout: float | None = None) -> None:
+        await self.fire_channel_gone(channel_id)
+        raise RuntimeError("channel is gone (404)")
+
+
+def test_a_caller_who_hangs_up_mid_call_leaves_a_record(tmp_path: Path) -> None:
+    async def run() -> Any:
+        ari = VanishingPBX()
+        engine, store = await _engine(tmp_path, ari, mode="puzzle", code="1234")
+        _seed_puzzle_pool(tmp_path)
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        live_id = engine.active_session.session_id if engine.active_session else None
+        await engine.wait_for_idle()
+        return seen, live_id, await store.query()
+
+    seen, live_id, records = asyncio.run(run())
+    # The panel said "hung up"; the history must say the same about that call.
+    assert seen[-2] == "hung_up"
+    assert len(records) == 1
+    assert records[0].session_id == live_id
+    assert records[0].outcome == "hangup"
+    assert records[0].mode == "puzzle"
+
+
+def test_an_engine_failure_does_not_inflate_the_hangup_count(tmp_path: Path) -> None:
+    """A call the engine broke is not one the caller walked away from."""
+
+    class BrokenPBX(FakePBX):
+        """Playback fails with the caller still on the line — our fault, not theirs."""
+
+        async def play(self, channel_id: str, media: str, *, timeout: float | None = None) -> None:
+            raise RuntimeError("playback exploded")
+
+    async def run() -> Any:
+        ari = BrokenPBX()
+        engine, store = await _engine(tmp_path, ari, mode="puzzle", code="1234")
+        _seed_puzzle_pool(tmp_path)
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen, await store.query(), await store.query(outcome="hangup")
+
+    seen, records, hangups = asyncio.run(run())
+    # The panel blamed the engine; so does the row, rather than the caller.
+    assert seen[-2] == "dropped"
+    assert [record.outcome for record in records] == ["dropped"]
+    assert hangups == []
+
+
+def test_a_store_failure_does_not_cost_the_console_its_terminal_state(tmp_path: Path) -> None:
+    """The call is over and the channel is down — a lost row is not worth more.
+
+    Persisting moved into the `finally` alongside the announcement, so a store
+    that throws sits between the caller's ending and the Operator seeing it.
+    """
+
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+
+        async def explode(record: Any) -> None:
+            raise RuntimeError("the disk is on fire")
+
+        store.add = explode  # type: ignore[method-assign]
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    seen = asyncio.run(run())
+    # The win still reached the panel, and the call task did not blow up.
+    assert seen[-2] == "handed_off"
+    assert seen[-1] is None
+
+
+def test_an_abandoned_puzzle_call_remembers_which_riddle_it_was(tmp_path: Path) -> None:
+    """What the engine has in hand off the CallObserver seam, it writes down."""
+
+    async def run() -> Any:
+        ari = VanishingPBX()
+        engine, store = await _engine(tmp_path, ari, mode="puzzle", code="1234")
+        _seed_puzzle_pool(tmp_path)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return await store.query()
+
+    records = asyncio.run(run())
+    assert records[0].detail == {"puzzle_id": "riddle-001.wav"}
+
+
+def test_a_call_that_never_got_a_config_snapshot_persists_nothing(tmp_path: Path) -> None:
+    """No Mode, no game — there is nothing to write down but the engine log."""
+
+    async def run() -> Any:
+        ari = FakePBX()
+        engine, store = await _engine(tmp_path, ari, mode="tweeted", code="1234")
+        (tmp_path / "config" / "mode.json").unlink()
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen, await store.query()
+
+    seen, records = asyncio.run(run())
+    assert seen[-2] == "dropped"
+    assert records == []

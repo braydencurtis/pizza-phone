@@ -31,7 +31,11 @@ from engine.call_session import CallSession
 #    dialling, and the moment a finished call ended (#36).
 # 3: …and its live progress — which attempt of how many, which room of the maze,
 #    which riddle — off the CallObserver seam (#37).
-SNAPSHOT_SCHEMA_VERSION = 3
+# 4: a call that ended without the mode handler returning now carries an outcome
+#    too — ``hangup`` for a caller who hung up mid-call, and the new ``dropped``
+#    for an engine failure (#50). ``call.outcome`` was always null for those
+#    before, and ``dropped`` is a value no older console has in its union.
+SNAPSHOT_SCHEMA_VERSION = 4
 
 
 def build_snapshot(config: ConfigSnapshot, session: CallSession | None) -> dict[str, Any]:

@@ -2,11 +2,12 @@
 
 The Call Engine owns one call at a time (one booth phone). A ``CallSession``
 carries that call's identity from ``StasisStart`` (session id, channel, caller,
-start time) and is filled in with the terminal outcome once the mode handler
-returns, then flattened into a :class:`~engine.call_store.CallRecord` for the
-SQLite store. It is deliberately a plain mutable object the Phase 2 dashboard
-can read straight off the engine to render the current call — no persistence or
-ARI knowledge lives here.
+start time) and is filled in with the terminal outcome — the mode handler's own
+via :meth:`CallSession.complete`, or the one :meth:`CallSession.abandon`
+synthesises when the handler never returned — then flattened into a
+:class:`~engine.call_store.CallRecord` for the SQLite store. It is deliberately
+a plain mutable object the Phase 2 dashboard can read straight off the engine to
+render the current call — no persistence or ARI knowledge lives here.
 
 **The state vocabulary** (#36) is what the Console renders the call *as*:
 ``answering`` → ``in_mode`` → one of the terminal states. The terminal states
@@ -47,6 +48,9 @@ TERMINAL_STATES: frozenset[CallState] = frozenset({"handed_off", "exiled", "hung
 # The terminal state each mode-handler outcome lands the call in. ``fail`` is a
 # roguelike walk that reached no leaf; the caller experiences it as the line
 # going dead, exactly like ``hangup``, so it is not given a state of its own.
+# ``dropped`` is absent on purpose: no mode handler can return it, because it is
+# the engine's own failure. :meth:`CallSession.abandon` sets that state and its
+# outcome together, as the pair they are.
 _STATE_BY_OUTCOME: dict[Outcome, CallState] = {
     "succeed": "handed_off",
     "exile": "exiled",
@@ -81,9 +85,10 @@ class CallSession:
     ``config`` is the Config Snapshot taken at pickup — the game this caller was
     given, and what they are judged against for the whole call however the
     Operator changes Global Config meanwhile. ``mode`` is stamped from it;
-    ``outcome`` / ``attempts`` / ``ended_at`` / ``detail`` stay empty until
-    :meth:`complete` records the handler's result. ``state`` and ``digits`` are
-    the live view: where the call has got to, and what the caller has dialled.
+    ``outcome`` / ``attempts`` / ``ended_at`` / ``detail`` stay empty until the
+    call ends, through :meth:`complete` or :meth:`abandon`. ``state`` and
+    ``digits`` are the live view: where the call has got to, and what the caller
+    has dialled.
     """
 
     session_id: str
@@ -178,21 +183,51 @@ class CallSession:
         Otherwise the engine broke, and the Console says *that* rather than
         letting our failure pass for a caller walking away.
 
-        Either way there is no outcome to persist (the handler never returned
-        one), so this is a Console state only.
+        The handler returned no outcome, so one is synthesised here (#50) — and
+        the fork above is exactly the distinction that makes that honest. A
+        caller who hung up mid-call ended their Call Session the same way as one
+        who sat silent through a read, so it is the same ``hangup``: the route
+        the news took to us is not something the history should record. An
+        engine failure is nobody's ending, so it gets ``dropped``, which no mode
+        handler can return and no count of callers should include.
+
+        Without this the call left no row at all, and the cockpit and the
+        history disagreed about a call the Operator had just watched.
         """
         self.ended_at = datetime.now(UTC)
-        self.state = "hung_up" if self.caller_gone else "dropped"
+        if self.caller_gone:
+            self.state, self.outcome = "hung_up", "hangup"
+        else:
+            self.state, self.outcome = "dropped", "dropped"
+        self.attempts = self._attempts_abandoned()
+
+    def _attempts_abandoned(self) -> int:
+        """How much of the game the engine can honestly claim the caller played.
+
+        Each branch is the number the Mode's own hangup path would have
+        returned had it got that far: rooms walked for a Walk
+        (``len(walk["path"])``, which is what ``enter_node`` reports as
+        ``depth``), and completed attempts for code entry (``attempt - 1``, an
+        attempt in flight being one the caller never burned). Zero when the call
+        ended before either — the caller took nothing from the booth.
+        """
+        if self.node is not None:
+            return self.node.depth
+        if self.current_attempt is not None:
+            return self.current_attempt - 1
+        return 0
 
     def to_record(self) -> CallRecord:
-        """Flatten a completed session into a persistable :class:`CallRecord`.
+        """Flatten a finished session into a persistable :class:`CallRecord`.
 
         Duration is the wall-clock span from pickup to terminal outcome. Call
-        only after :meth:`complete`; an unfinished session has no outcome to
-        persist.
+        only after :meth:`complete` or :meth:`abandon`; a session still in
+        flight has no ending to write down, and neither has one that failed
+        before its Config Snapshot was taken — no Mode means no game to record
+        the caller as having played.
         """
         if self.ended_at is None or self.outcome is None or self.mode is None:
-            raise ValueError("CallSession is not complete; call complete() first")
+            raise ValueError("CallSession has no ending to persist")
         duration = (self.ended_at - self.started_at).total_seconds()
         return CallRecord(
             session_id=self.session_id,

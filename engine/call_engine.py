@@ -251,6 +251,14 @@ class CallEngine:
         thread; it does the success/hangup routing itself through ``ARICallIO``.
         Any failure is contained here so one bad call can't take down the engine
         — the channel is torn down and the slot freed regardless.
+
+        Both ways out lead to the same two closing steps, which is why they sit
+        in the ``finally``: every call that ended is written to the store, and
+        then announced to the Console. The handler returning is only the tidy
+        way to end — a caller who hangs up mid-playback ends the call by making
+        every following ARI command 404, and that arrives here as an exception
+        (#50). Persisting on the success path alone left those calls in the
+        cockpit and out of the history.
         """
         try:
             session.config = await asyncio.to_thread(
@@ -265,20 +273,52 @@ class CallEngine:
             self._notify_change()
             result = await asyncio.to_thread(self._run_mode, session)
             session.complete(result)
-            await self._store.add(session.to_record())
-            logger.info(
-                "Session %s ended: mode=%s outcome=%s attempts=%d",
-                session.session_id,
-                session.mode,
-                session.outcome,
-                session.attempts,
-            )
         except Exception:
             logger.exception("Session %s failed", session.session_id)
             session.abandon()
             await self._safe_hangup(session.channel_id)
         finally:
+            await self._persist(session)
             self._announce_end_and_linger(session)
+
+    async def _persist(self, session: CallSession) -> None:
+        """Write the finished call to the store, however it finished.
+
+        The outcome is either the mode handler's own or the one
+        :meth:`CallSession.abandon` synthesised when the handler never returned
+        — and the second is not the rare case: a caller putting the handset
+        down mid-prompt is one of the commonest endings there is.
+
+        Two sessions are not written. One with no Mode never had a Config
+        Snapshot, so it never had a game the caller can be recorded as having
+        played; one with no outcome never reached an ending at all (a shutdown
+        cancelling the call task mid-flight). Both are engine-log material only.
+
+        A store failure is logged and swallowed. The call is over and the
+        channel is down by now, so raising would turn one lost row into an
+        unhandled task exception and cost the Console its terminal state as
+        well.
+        """
+        if session.mode is None or session.outcome is None:
+            logger.warning(
+                "Session %s left no record: mode=%r outcome=%r",
+                session.session_id,
+                session.mode,
+                session.outcome,
+            )
+            return
+        try:
+            await self._store.add(session.to_record())
+        except Exception:
+            logger.exception("Could not persist session %s", session.session_id)
+            return
+        logger.info(
+            "Session %s ended: mode=%s outcome=%s attempts=%d",
+            session.session_id,
+            session.mode,
+            session.outcome,
+            session.attempts,
+        )
 
     # -- the afterglow -----------------------------------------------------
 

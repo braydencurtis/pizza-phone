@@ -95,8 +95,20 @@ apart on purpose.
   would otherwise surface as "the engine dropped the call". So the engine
   subscribes to `StasisEnd` and `ChannelHangupRequest`, notes on the session
   that the caller left, and `CallSession.abandon()` picks `hung_up` or `dropped`
-  from that. Neither is persisted — the handler returned no outcome — so this is
-  a Console state only.
+  from that.
+
+Both are persisted (#50). The mode handler returns exactly once, at a tidy
+outcome, so a call that ended any other way has no outcome of its own and
+`abandon()` synthesises one: `hangup` for a caller who put the handset down —
+the same ending as a caller who sat silent through a read, reaching us as a 404
+instead of an empty string — and `dropped` for a failure of ours, an `Outcome`
+no mode handler can return, so a broken call never lands in the hangup count.
+The engine persists in a `finally`, so the tidy and the untidy endings converge
+on one write. The single call not written is one that failed before its Config
+Snapshot: no Mode means no game the caller can be recorded as having played, and
+`to_record()` refuses it. Before this, a caller hanging up mid-playback left the
+Console showing "hung up" and the store holding no row at all — the cockpit and
+the history disagreeing about a call the Operator had just watched.
 
 Everything the cockpit shows about a live call is observed from ARI events the
 engine already receives, so `core/` is untouched: caller ID and start time come

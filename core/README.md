@@ -55,6 +55,13 @@ Phone-Tree did until #53: it read silence as an unrecognised key and replayed
 the room, forever, and `max_depth` could not stop it because no move was ever
 made. A key that *is* pressed but is not a choice is still forgiven.
 
+The other way a caller leaves — putting the handset down while a prompt plays —
+never reaches these functions at all: the channel dies, the next ARI command
+404s, and the flow raises instead of returning. The engine ends that call on the
+same `hangup` (#50), so one caller behaviour keeps one outcome however the news
+arrives. `Outcome` also carries `dropped` for the engine's own failures, which
+nothing in `core/` returns.
+
 ## The two seams
 
 `CallIO` and `CallObserver` are deliberately separate, and ADR-0003 is the

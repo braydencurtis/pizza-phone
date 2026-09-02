@@ -166,7 +166,19 @@ def test_a_dropped_call_says_so_rather_than_passing_for_a_hangup() -> None:
     session.abandon()
     call = build_snapshot(_config(), session)["call"]
     assert call["state"] == "dropped"
-    assert call["outcome"] is None
+    # The synthesised outcome the store gets (#50) reaches the panel too, and
+    # says the same thing the state does rather than the caller's "hangup".
+    assert call["outcome"] == "dropped"
+
+
+def test_a_caller_who_hung_up_mid_call_shows_the_outcome_it_is_stored_under() -> None:
+    """The panel and the past-calls view must not describe one call two ways."""
+    session = _session(config=_config())
+    session.caller_gone = True
+    session.abandon()
+    call = build_snapshot(_config(), session)["call"]
+    assert call["state"] == "hung_up"
+    assert call["outcome"] == "hangup"
 
 
 # -- live progress off the CallObserver seam (#37) ---------------------------

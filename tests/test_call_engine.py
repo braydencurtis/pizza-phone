@@ -841,13 +841,59 @@ def test_an_engine_failure_does_not_inflate_the_hangup_count(tmp_path: Path) -> 
         ari = BrokenPBX()
         engine, store = await _engine(tmp_path, ari, mode="puzzle", code="1234")
         _seed_puzzle_pool(tmp_path)
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
         await ari.fire_stasis_start("chan-1")
         await engine.wait_for_idle()
-        return await store.query(), await store.query(outcome="hangup")
+        return seen, await store.query(), await store.query(outcome="hangup")
 
-    records, hangups = asyncio.run(run())
+    seen, records, hangups = asyncio.run(run())
+    # The panel blamed the engine; so does the row, rather than the caller.
+    assert seen[-2] == "dropped"
     assert [record.outcome for record in records] == ["dropped"]
     assert hangups == []
+
+
+def test_a_store_failure_does_not_cost_the_console_its_terminal_state(tmp_path: Path) -> None:
+    """The call is over and the channel is down — a lost row is not worth more.
+
+    Persisting moved into the `finally` alongside the announcement, so a store
+    that throws sits between the caller's ending and the Operator seeing it.
+    """
+
+    async def run() -> Any:
+        ari = FakePBX(dtmf=["1234"])
+        engine, store = await _engine(tmp_path, ari, mode="tweeted", code="1234", attempt_limit=3)
+
+        async def explode(record: Any) -> None:
+            raise RuntimeError("the disk is on fire")
+
+        store.add = explode  # type: ignore[method-assign]
+        seen: list[Any] = []
+        engine.on_change(_states(engine, seen))
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return seen
+
+    seen = asyncio.run(run())
+    # The win still reached the panel, and the call task did not blow up.
+    assert seen[-2] == "handed_off"
+    assert seen[-1] is None
+
+
+def test_an_abandoned_puzzle_call_remembers_which_riddle_it_was(tmp_path: Path) -> None:
+    """What the engine has in hand off the CallObserver seam, it writes down."""
+
+    async def run() -> Any:
+        ari = VanishingPBX()
+        engine, store = await _engine(tmp_path, ari, mode="puzzle", code="1234")
+        _seed_puzzle_pool(tmp_path)
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return await store.query()
+
+    records = asyncio.run(run())
+    assert records[0].detail == {"puzzle_id": "riddle-001.wav"}
 
 
 def test_a_call_that_never_got_a_config_snapshot_persists_nothing(tmp_path: Path) -> None:

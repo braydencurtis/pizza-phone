@@ -45,14 +45,14 @@ def _session(
     )
 
 
-def test_schema_version_is_three() -> None:
-    """#37 added the live progress — attempt, node, puzzle — to the call view.
+def test_schema_version_is_four() -> None:
+    """#50 gave the abandoned endings an outcome, `dropped` among them.
 
     The number is asserted rather than merely mirrored so that widening the wire
     shape without bumping it fails here, where the browser's own
     `SNAPSHOT_SCHEMA_VERSION` is the thing that would otherwise silently drift.
     """
-    assert SNAPSHOT_SCHEMA_VERSION == 3
+    assert SNAPSHOT_SCHEMA_VERSION == 4
 
 
 def test_idle_snapshot_has_no_call() -> None:

@@ -190,18 +190,21 @@ class CallSession:
         the news took to us is not something the history should record. An
         engine failure is nobody's ending, so it gets ``dropped``, which no mode
         handler can return and no count of callers should include.
-
-        Without this the call left no row at all, and the cockpit and the
-        history disagreed about a call the Operator had just watched.
         """
         self.ended_at = datetime.now(UTC)
         if self.caller_gone:
             self.state, self.outcome = "hung_up", "hangup"
         else:
             self.state, self.outcome = "dropped", "dropped"
-        self.attempts = self._attempts_abandoned()
+        self.attempts = self._attempts_finished()
+        # The riddle the caller was abandoning is worth keeping — it is already
+        # in hand, off the CallObserver seam. A Walk's path is not: the keys
+        # pressed live in the walker, inside the worker thread, and die with the
+        # exception. So an abandoned Walk carries its room count in ``attempts``
+        # and nothing more.
+        self.detail = {"puzzle_id": self.puzzle_id} if self.puzzle_id else {}
 
-    def _attempts_abandoned(self) -> int:
+    def _attempts_finished(self) -> int:
         """How much of the game the engine can honestly claim the caller played.
 
         Each branch is the number the Mode's own hangup path would have
@@ -217,6 +220,18 @@ class CallSession:
             return self.current_attempt - 1
         return 0
 
+    @property
+    def is_persistable(self) -> bool:
+        """Is there an ending here honest enough to write down?
+
+        Both an ending (:meth:`complete` or :meth:`abandon` has run) and a Mode:
+        a call that failed before its Config Snapshot never had a game, so there
+        is nothing to record the caller as having played. The engine asks before
+        writing and :meth:`to_record` refuses when it is false, so the rule is
+        stated once rather than agreed on by two places.
+        """
+        return self.ended_at is not None and self.outcome is not None and self.mode is not None
+
     def to_record(self) -> CallRecord:
         """Flatten a finished session into a persistable :class:`CallRecord`.
 
@@ -226,8 +241,10 @@ class CallSession:
         before its Config Snapshot was taken — no Mode means no game to record
         the caller as having played.
         """
-        if self.ended_at is None or self.outcome is None or self.mode is None:
+        if not self.is_persistable:
             raise ValueError("CallSession has no ending to persist")
+        # What is_persistable just established, spelled out for the type checker.
+        assert self.ended_at is not None and self.outcome is not None and self.mode is not None
         duration = (self.ended_at - self.started_at).total_seconds()
         return CallRecord(
             session_id=self.session_id,

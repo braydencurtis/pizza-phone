@@ -104,9 +104,12 @@ the same ending as a caller who sat silent through a read, reaching us as a 404
 instead of an empty string — and `dropped` for a failure of ours, an `Outcome`
 no mode handler can return, so a broken call never lands in the hangup count.
 The engine persists in a `finally`, so the tidy and the untidy endings converge
-on one write. The single call not written is one that failed before its Config
-Snapshot: no Mode means no game the caller can be recorded as having played, and
-`to_record()` refuses it. Before this, a caller hanging up mid-playback left the
+on one write. The call not written is one that failed before its Config
+Snapshot: no Mode means no game the caller can be recorded as having played.
+`CallSession.is_persistable` is that rule, stated once — the engine asks it
+before writing and `to_record()` refuses when it is false — so the Console's
+`dropped` panel is, for that one case, all the record there is besides the
+engine log. Before this, a caller hanging up mid-playback left the
 Console showing "hung up" and the store holding no row at all — the cockpit and
 the history disagreeing about a call the Operator had just watched.
 

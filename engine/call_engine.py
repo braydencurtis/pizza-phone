@@ -253,12 +253,12 @@ class CallEngine:
         — the channel is torn down and the slot freed regardless.
 
         Both ways out lead to the same two closing steps, which is why they sit
-        in the ``finally``: every call that ended is written to the store, and
-        then announced to the Console. The handler returning is only the tidy
-        way to end — a caller who hangs up mid-playback ends the call by making
-        every following ARI command 404, and that arrives here as an exception
-        (#50). Persisting on the success path alone left those calls in the
-        cockpit and out of the history.
+        in the ``finally``: the call is offered to the store, and then announced
+        to the Console. The handler returning is only the tidy way to end — a
+        caller who hangs up mid-playback ends the call by making every following
+        ARI command 404, and that arrives here as an exception (#50). Persisting
+        on the success path alone left those calls in the cockpit and out of the
+        history.
         """
         try:
             session.config = await asyncio.to_thread(
@@ -289,17 +289,19 @@ class CallEngine:
         — and the second is not the rare case: a caller putting the handset
         down mid-prompt is one of the commonest endings there is.
 
-        Two sessions are not written. One with no Mode never had a Config
+        Whether there is anything to write is the session's own question, and
+        it is asked rather than caught: a call with no Mode never had a Config
         Snapshot, so it never had a game the caller can be recorded as having
-        played; one with no outcome never reached an ending at all (a shutdown
-        cancelling the call task mid-flight). Both are engine-log material only.
+        played, and one with no outcome never reached an ending at all (a
+        shutdown cancelling the call task mid-flight). Those are engine-log
+        material only — the log line below is the whole record of them.
 
         A store failure is logged and swallowed. The call is over and the
         channel is down by now, so raising would turn one lost row into an
         unhandled task exception and cost the Console its terminal state as
         well.
         """
-        if session.mode is None or session.outcome is None:
+        if not session.is_persistable:
             logger.warning(
                 "Session %s left no record: mode=%r outcome=%r",
                 session.session_id,

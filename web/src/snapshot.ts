@@ -7,8 +7,8 @@
  * talking to instead of quietly rendering nonsense.
  */
 
-/** 3: the call view gained its live progress — attempt, node, puzzle (#37). */
-export const SNAPSHOT_SCHEMA_VERSION = 3;
+/** 4: a call that ended without a handler outcome now carries one, `dropped` among them (#50). */
+export const SNAPSHOT_SCHEMA_VERSION = 4;
 
 export type Mode = "tweeted" | "puzzle" | "roguelike";
 /**

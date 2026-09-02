@@ -14,6 +14,7 @@
 | Tweeted Mode | The Code is posted publicly (e.g., Twitter/X). Anyone who dials it succeeds. |
 | Audio Puzzle Mode | Asterisk plays a `.wav` riddle. The answer is the Code. Caller dials the answer. |
 | Roguelike Phone-Tree Mode | An infinitely looping DTMF maze. Caller picks up, navigates branching choices with no lives or attempt limit. Reaching the leaf node has the Code spoken aloud. Caller must then hang up and dial the Code to ring the Upstairs Phone. Tree is regenerated fresh per Call Session. |
+| Walk | What one caller did in the Roguelike Phone-Tree: the rooms they stood in, the keys they pressed, and which of the two ways it ended — the Code read out at the leaf, or the caller gone. Rooms *stood in*, so a caller who presses a key that is not a choice replays the room without the walk recording that they were ever anywhere else. |
 | Prompt Library | A collection of pre-written spooky scenario prompts (audio or text-to-speech) used as nodes in the Roguelike tree. Authored by the team, not procedurally generated. |
 | Puzzle Pool | A set of pre-recorded audio puzzles available for a given day. Callers receive one puzzle from the pool. |
 | Attempt Limit | Maximum number of wrong answer attempts allowed per Call Session before disconnection. Set to 3. |
@@ -51,6 +52,7 @@
 | Roguelike tree | Infinite maze, no lives, pre-written prompts, tree regenerated per session |
 | Roguelike code delivery | Code spoken at end of successful path; caller hangs up and dials it |
 | Roguelike prompt delivery | TTS-generated audio, designed to be slightly uncanny for the backrooms aesthetic |
+| Silence in a Call Session | An empty DTMF read is the caller having gone, in all three Modes: the Mode tears the call down and the Call Session ends on `hangup`. The Roguelike Phone-Tree used to read silence as an unrecognised key and re-ask the same room forever, which held the engine's one call slot against every later caller until the handset was physically replaced (#53). A key that *is* pressed but is not a choice is still forgiven — the room is replayed and nothing is counted against the caller, so the maze keeps its "no lives or attempt limits". |
 | Call logging / persistence | SQLite (stdlib, single file) is the store for Call Session history — core columns (session_id, timestamp, mode, outcome, duration, attempts) plus a JSON column for semi-structured per-mode detail (e.g. roguelike path). Chosen over JSONL because the console's needs are query-shaped (filter, paginate, join to recordings, hunt clips for video) and the switch is ~free while the persistence layer is being rewritten for the engine. Recordings stay as WAV files on disk; the DB holds their paths. |
 | Backend language | Python (async / asyncio), driving calls via ARI/Stasis — not AGI |
 | Anti-cheese strategy | Defer — trust the experience as deterrent. Physical gatekeeper if needed. |

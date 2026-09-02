@@ -430,3 +430,107 @@ def test_every_flow_still_runs_with_no_observer_at_all(tmp_path: Path) -> None:
     roguelike = FakeCallIO(dtmf=["1"] * 20)
     flow.run_roguelike(roguelike, _router(tmp_path, mode="roguelike"))
     assert roguelike.spoken
+
+
+# -- silence ends a call, in every Mode (#53) --------------------------------
+#
+# The Booth Phone holds one call at a time: a session that never ends does not
+# just waste a call, it makes the engine hang up on everybody behind it until
+# the handset is physically replaced. Tweeted and Audio Puzzle already read an
+# empty ``read_dtmf`` as the caller having gone; the maze read it as "not a key
+# I recognise" and asked the same room again every 15 seconds, forever. These
+# tests pin the rule down as one rule, held by all three Modes.
+
+
+class SilentCallIO(FakeCallIO):
+    """A caller who picks up and never presses anything.
+
+    ``FakeCallIO`` already returns ``""`` from an exhausted queue, which is the
+    signal itself. The bound is so the bug this guards fails the suite instead
+    of hanging it: before the fix the maze asks this caller forever.
+    """
+
+    PATIENCE = 20
+
+    def __init__(self) -> None:
+        super().__init__(dtmf=[])
+
+    def read_dtmf(self, num_digits: int, timeout_ms: int) -> str:
+        if len(self.read_calls) >= self.PATIENCE:
+            raise AssertionError(
+                f"a silent caller was asked {self.PATIENCE} times — the flow is looping"
+            )
+        return super().read_dtmf(num_digits, timeout_ms)
+
+
+def test_a_silent_caller_in_the_maze_hangs_up_instead_of_looping(tmp_path: Path) -> None:
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = SilentCallIO()
+
+    result = flow.run_roguelike(io, router)
+
+    assert result["outcome"] == "hangup"
+    assert io.hung_up is True
+    assert io.succeeded is False
+
+
+def test_a_silent_caller_in_the_maze_is_never_read_the_code(tmp_path: Path) -> None:
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = SilentCallIO()
+
+    flow.run_roguelike(io, router)
+
+    assert not any("0000" in line for line in io.spoken)
+
+
+def test_a_silent_maze_caller_is_not_logged_as_a_played_session(tmp_path: Path) -> None:
+    """Same as the other Modes: a caller who walked away has nothing to log."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+
+    flow.run_roguelike(SilentCallIO(), router)
+
+    assert _log_lines(tmp_path) == []
+
+
+def test_silence_ends_a_call_the_same_way_in_all_three_modes(tmp_path: Path) -> None:
+    """The invariant the maze broke: one rule for silence, held everywhere."""
+    tweeted_io = SilentCallIO()
+    tweeted = flow.run_tweeted(
+        tweeted_io, _router(tmp_path, mode="tweeted"), exile_media="e", wrong_media="w"
+    )
+    puzzle_io = SilentCallIO()
+    puzzle = flow.run_puzzle(
+        puzzle_io,
+        _router(tmp_path, mode="puzzle"),
+        puzzle_id="p.wav",
+        prompt_media="prompt",
+        exile_media="e",
+        wrong_media="w",
+    )
+    roguelike_io = SilentCallIO()
+    roguelike = flow.run_roguelike(roguelike_io, _router(tmp_path, mode="roguelike"))
+
+    assert [tweeted["outcome"], puzzle["outcome"], roguelike["outcome"]] == ["hangup"] * 3
+    assert [tweeted_io.hung_up, puzzle_io.hung_up, roguelike_io.hung_up] == [True] * 3
+    assert [tweeted_io.succeeded, puzzle_io.succeeded, roguelike_io.succeeded] == [False] * 3
+
+
+def test_a_fat_finger_in_the_maze_is_still_forgiven(tmp_path: Path) -> None:
+    """A key that *is* pressed is not silence — the room is simply asked again."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = FakeCallIO(dtmf=["9", "0", "9", *["1"] * 40])
+
+    result = flow.run_roguelike(io, router)
+
+    assert result["outcome"] != "hangup"
+    assert any("hang up and dial" in line.lower() for line in io.spoken)
+
+
+def test_a_silent_maze_caller_reports_the_walk_they_actually_made(tmp_path: Path) -> None:
+    """No pacing: a caller who never moved does not report rooms they never left."""
+    observer = RecordingObserver()
+    io = SilentCallIO()
+
+    flow.run_roguelike(io, _router(tmp_path, mode="roguelike"), observer=observer)
+
+    assert [depth for _, depth, _ in observer.nodes] == [0]

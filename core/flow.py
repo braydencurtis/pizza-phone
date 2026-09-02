@@ -12,6 +12,12 @@ Media identifiers (``prompt_media``, ``exile_media``, ``wrong_media``) are
 supplied by the caller because their naming is driver-specific — see
 ``CallIO``. Terminal outcomes are logged exactly once via the router.
 
+Silence means the same thing in all three Modes: an empty ``read_dtmf`` is the
+caller having gone, so the call is torn down and the session ends on
+``hangup``. It is the caller's commonest ending — a handset put down, or left
+off the hook — and the booth holds one call at a time, so a Mode that kept
+asking an empty booth would hang up on everybody behind it (#53).
+
 Each function also takes an optional :class:`~core.observer.CallObserver` (#37).
 These functions return exactly once, at the terminal outcome, so without it
 nothing about a call in progress — which attempt, which room, which riddle —
@@ -91,9 +97,27 @@ def run_roguelike(
     choice_timeout_ms: int = ROGUELIKE_CHOICE_TIMEOUT_MS,
     observer: CallObserver = NULL_OBSERVER,
 ) -> dict[str, Any]:
-    """Roguelike mode: navigate the phone-tree, then deliver the code at the leaf."""
+    """Roguelike mode: navigate the phone-tree, then deliver the code at the leaf.
+
+    A caller who goes silent in the maze ends the call, exactly as they do in
+    the other two Modes — see the walker for why the maze could not stop them
+    on its own (#53).
+    """
     ctx = _RoguelikeCallIOContext(io, choice_timeout_ms)
-    mode_roguelike.handle(ctx, router.config.code, observer=observer)
+    walk = mode_roguelike.handle(ctx, router.config.code, observer=observer)
+
+    if walk["outcome"] == "hangup":
+        # Not dispatched and not logged, exactly as in ``_run_code_entry``:
+        # nobody played, so there is no session to judge. The engine still
+        # persists the call as a hangup, and the rooms the caller got through
+        # before leaving go with it — how far they got is the interesting part
+        # of a walk that was abandoned.
+        return _caller_left(
+            io,
+            mode=router.config.mode,
+            attempts=len(walk["path"]),
+            path=walk["path"],
+        )
 
     result = router.dispatch()
     if result["outcome"] == "succeed":
@@ -131,8 +155,8 @@ def _run_code_entry(
         observer.attempt_started(attempt, max_attempts)
         entered = io.read_dtmf(digit_count, timeout_ms)
         if not entered:
-            io.hangup()
-            return {"outcome": "hangup", "attempts": attempt - 1}
+            # An attempt the caller never made is not one they burned.
+            return _caller_left(io, attempts=attempt - 1)
 
         is_last = attempt == max_attempts
         result = router.dispatch(
@@ -158,6 +182,18 @@ def _run_code_entry(
         io.play(wrong_media)
 
     return result
+
+
+def _caller_left(io: CallIO, **detail: Any) -> dict[str, Any]:
+    """The caller went quiet: tear the call down and end the session on ``hangup``.
+
+    The one place silence becomes an outcome, so the rule CONTEXT.md states —
+    silence ends a Call Session in every Mode — is one rule rather than three
+    that happen to agree. What each Mode knows about the abandoned call differs
+    (attempts burned, rooms walked), so that rides along in ``detail``.
+    """
+    io.hangup()
+    return {"outcome": "hangup", **detail}
 
 
 class _RoguelikeCallIOContext:

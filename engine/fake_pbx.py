@@ -330,7 +330,8 @@ DEFAULT_INTERVAL_S = 8.0
 
 # Every Mode, and every terminal outcome a caller can reach: dial the code and
 # win, burn the attempt limit and be Exiled, or pick up and say nothing.
-# Roguelike has no attempt limit and no code entry, so it has the one path.
+# Roguelike has no attempt limit and no code entry, so it has two paths rather
+# than three — the walk, and the caller who goes quiet in it (#53).
 DEFAULT_SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
         name="tweeted-success",
@@ -395,6 +396,14 @@ DEFAULT_SCENARIOS: tuple[Scenario, ...] = (
         dtmf=("1",) * 40,
         caller_id="+15550003001",
         expect=frozenset({"succeed", "fail"}),
+    ),
+    Scenario(
+        name="roguelike-hangup",
+        mode="roguelike",
+        code="8675",
+        dtmf=(),
+        caller_id="+15550003002",
+        expect=frozenset({"hangup"}),
     ),
 )
 

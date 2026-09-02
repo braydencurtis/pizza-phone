@@ -242,6 +242,40 @@ def test_hangup_without_input_is_persisted(tmp_path: Path) -> None:
     assert records[0].outcome == "hangup"
 
 
+def test_a_silent_roguelike_caller_frees_the_booth_for_the_next_one(tmp_path: Path) -> None:
+    """The bricked booth (#53): one handset off the hook used to close it for good.
+
+    The maze re-asked a silent caller forever, and the engine holds one call at
+    a time — so every caller behind them was hung up on until somebody walked
+    over and replaced the handset. The second caller here is the whole point:
+    they must be taken, not refused as busy.
+    """
+
+    async def run() -> Any:
+        ari = FakePBX(dtmf=[])  # picks up, presses nothing, never puts it down
+        engine, store = await _engine(tmp_path, ari, mode="roguelike", code="0000")
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+
+        ari.script(["1"] * 40)  # the next caller actually plays
+        await ari.fire_stasis_start("chan-2")
+        await engine.wait_for_idle()
+        return engine, store, ari
+
+    engine, store, ari = asyncio.run(run())
+    assert engine.active_session is None
+    # The silent call was torn down, and the next caller was never refused.
+    assert ("hangup", "chan-1") in ari.calls
+    assert ("answer", "chan-2") in ari.calls
+    assert ("hangup", "chan-2") not in ari.calls
+
+    records = asyncio.run(store.query())
+    assert len(records) == 2, "both callers were taken"
+    silent = asyncio.run(store.query(outcome="hangup"))
+    assert len(silent) == 1
+    assert silent[0].mode == "roguelike"
+
+
 def test_second_call_while_busy_is_hung_up(tmp_path: Path) -> None:
     """One booth phone: a StasisStart during a live call is rejected, not queued."""
 

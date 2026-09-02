@@ -23,13 +23,14 @@ this code did not.
   Config Snapshot and log the call-session record.
 - `mode_tweeted.py` / `mode_puzzle.py` / `mode_roguelike.py` — per-mode logic;
   `mode_puzzle` also holds `PuzzleSelector`; `mode_roguelike` holds tree
-  generation + navigation.
+  generation + navigation, and returns a `Walk` — where the caller went and
+  which of the two ways it ended.
 - `headless.py` — headless roguelike walker (used by the router and tooling).
 - `tts.py` — text-to-speech backends (espeak / flite / macOS `say`).
 - `code_manager.py` — field-level edits to Global Config (rotate the code,
   switch the mode), atomic via `config.py`.
 - `logger.py` — `CallSessionLogger`: the JSON-lines call-session record.
-- `types.py` — shared `Mode` / `Outcome` literals.
+- `types.py` — shared `Mode` / `Outcome` / `WalkOutcome` literals.
 
 ## The Config Snapshot
 
@@ -41,6 +42,18 @@ the snapshot and `core.flow` reads the Code and Attempt Limit off it, so the
 digits collected and the digits judged always come from the same config. Writes
 go through `config.write_config`, which replaces the file atomically — a call
 taking its snapshot mid-write can never read a truncated file. See issue #34.
+
+## Silence ends a call
+
+An empty `read_dtmf` means the caller has gone, and every mode flow treats it
+the same way: tear the call down, end the Call Session on `hangup`. It goes
+through one function, `flow._caller_left`, so the rule is one rule rather than
+three that happen to agree. This matters more than it looks — the Call Engine
+owns one call at a time, so a mode that kept asking an empty booth would hold
+the slot and hang up on every caller behind it. That is what the Roguelike
+Phone-Tree did until #53: it read silence as an unrecognised key and replayed
+the room, forever, and `max_depth` could not stop it because no move was ever
+made. A key that *is* pressed but is not a choice is still forgiven.
 
 ## The two seams
 

@@ -1,9 +1,18 @@
+"""The Roguelike Phone-Tree: an infinite DTMF maze with no lives and no limit.
+
+The tree is regenerated per Call Session, so node indices mean nothing outside
+one call. The walk ends one of two ways: the caller reaches the leaf and has the
+Code read to them, or they go quiet and the call is over — silence is the caller
+having gone, the same rule the other two Modes hold (see ``core.flow``, #53).
+"""
+
 from __future__ import annotations
 
 import random
 from typing import Protocol, TypedDict, TypeGuard, cast
 
 from core.observer import NULL_OBSERVER, CallObserver
+from core.types import WalkOutcome
 
 
 class RoguelikeContext(Protocol):
@@ -21,6 +30,21 @@ class TerminalNode(TypedDict):
 
 
 Node = ChoiceNode | TerminalNode
+
+
+class Walk(TypedDict):
+    """What one caller did in the maze.
+
+    ``outcome`` is how the walk ended: ``succeed`` if the Code was read out
+    (at the leaf, or at the depth bound), ``hangup`` if the caller went silent.
+    ``path`` is the keys they pressed and ``nodes_visited`` the rooms they stood
+    in — rooms, not turns round the loop, so a caller who fumbles a key is not
+    reported as having paced the corridor twice.
+    """
+
+    outcome: WalkOutcome
+    path: list[str]
+    nodes_visited: list[int]
 
 
 def _is_terminal(node: Node) -> TypeGuard[TerminalNode]:
@@ -86,11 +110,17 @@ def handle(
     seed: int | None = None,
     max_depth: int = 20,
     observer: CallObserver = NULL_OBSERVER,
-) -> dict[str, list[str] | list[int]]:
+) -> Walk:
+    """Walk the caller through the maze until they reach the leaf or leave."""
     tree = make_tree(seed=seed)
     path: list[str] = []
     nodes_visited: list[int] = []
     idx = 0
+    # Whether this turn is an arrival or a replay of the room the caller is
+    # already standing in. A refused key replays; only arrivals join the walk.
+    # The alternative — appending where `idx` moves — would list a room the
+    # depth bound stops the caller from ever reaching.
+    arrived = True
 
     while len(path) < max_depth:
         node = tree[idx]
@@ -100,22 +130,43 @@ def handle(
         # counting that would show the Operator a caller descending steadily
         # through a maze they are in fact stuck in. The index is carried too,
         # but means nothing outside this call: the tree is regenerated per Call
-        # Session.
+        # Session. The replay is still reported, because the caller really is
+        # hearing the room again — it is the walk, below, that must not grow.
         observer.node_entered(idx, len(path), terminal)
-        nodes_visited.append(idx)
+        if arrived:
+            nodes_visited.append(idx)
         ctx.speak(node["text"])
 
         if terminal:
-            ctx.speak(f"The code is {code}. Hang up and dial it now.")
-            return {"path": path, "nodes_visited": nodes_visited}
+            return _deliver(ctx, code, path, nodes_visited)
 
         choices = cast(ChoiceNode, node)["choices"]
         choice = ctx.read_choice("".join(choices.keys()))
+        if not choice:
+            # Silence: the read timed out having heard nothing, which every
+            # Mode reads as the caller having gone. Asking again would be
+            # asking an empty booth, and this maze has no depth bound to stop
+            # it — no move is made, so `max_depth` never moves either. A
+            # handset left off the hook would hold the one call slot the engine
+            # has and every caller behind it would be hung up on (#53).
+            return Walk(outcome="hangup", path=path, nodes_visited=nodes_visited)
         if choice not in choices:
+            # A key that *was* pressed: somebody is there, they just missed. Ask
+            # again, from the same room, and do not count it against them —
+            # the maze has no attempt limit.
+            arrived = False
             continue
 
+        arrived = True
         path.append(choice)
         idx = choices[choice]
 
+    return _deliver(ctx, code, path, nodes_visited)
+
+
+def _deliver(
+    ctx: RoguelikeContext, code: str, path: list[str], nodes_visited: list[int]
+) -> Walk:
+    """Read the Code out and end the walk — the one way to win the maze."""
     ctx.speak(f"The code is {code}. Hang up and dial it now.")
-    return {"path": path, "nodes_visited": nodes_visited}
+    return Walk(outcome="succeed", path=path, nodes_visited=nodes_visited)

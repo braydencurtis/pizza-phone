@@ -17,14 +17,19 @@ class CliContext:
         print(f"  📞 {text}")
 
     def read_choice(self, keys: str) -> str:
-        while True:
-            try:
-                val = input(f"  Press [{keys}]: ").strip()
-            except EOFError:
-                val = ""
-            if val and val in keys:
-                return val
+        """Read a key, or ``""`` for a player who walked away.
+
+        Empty is what a real caller's timed-out DTMF read returns, and the
+        walker ends the call on it (#53) — so EOF, or just pressing enter, is
+        how you hang up on the playground.
+        """
+        try:
+            val = input(f"  Press [{keys}]: ").strip()
+        except EOFError:
+            return ""
+        if val and val not in keys:
             print(f"  ⚠ Invalid choice. Press [{keys}].")
+        return val
 
 
 def main() -> None:
@@ -47,6 +52,7 @@ def main() -> None:
 
     print()
     print("=" * 60)
+    print(f"  Outcome: {result['outcome']}")
     print(f"  Steps taken: {len(result['path'])}")
     print(f"  Nodes visited: {result['nodes_visited']}")
     print("=" * 60)

@@ -107,11 +107,12 @@ def make_tree(seed: int | None = None) -> list[Node]:
     return tree
 
 
-# How many keys in a row one room will take that are not among its choices
-# before the walk ends. Liveness, not lives: it is not counting wrong answers —
-# the maze has none to get wrong — it is noticing that nobody is choosing. Five
-# is far past a fat finger and far short of a caller's patience, and a caller
-# who fumbles, moves on and fumbles again in the next room never approaches it.
+# How many keys in a row one room takes that are not among its choices before
+# it stops asking — the fifth such key ends the walk rather than earning a sixth
+# ask. Liveness, not lives: it is not counting wrong answers, because the maze
+# has none to get wrong, it is noticing that nobody is choosing. Five is far
+# past a fat finger and far short of a caller's patience, and a caller who
+# fumbles, moves on and fumbles again in the next room never approaches it.
 REFUSED_KEYS_BEFORE_GONE = 5
 
 
@@ -121,7 +122,6 @@ def handle(
     seed: int | None = None,
     max_depth: int = 20,
     observer: CallObserver = NULL_OBSERVER,
-    refused_keys_before_gone: int = REFUSED_KEYS_BEFORE_GONE,
 ) -> Walk:
     """Walk the caller through the maze until they reach the leaf or leave."""
     tree = make_tree(seed=seed)
@@ -164,13 +164,13 @@ def handle(
             # it — no move is made, so `max_depth` never moves either. A
             # handset left off the hook would hold the one call slot the engine
             # has and every caller behind it would be hung up on (#53).
-            return Walk(outcome="hangup", path=path, nodes_visited=nodes_visited)
+            return _gone(path, nodes_visited)
         if choice not in choices:
             # A key that *was* pressed: somebody is there, they just missed. Ask
             # again, from the same room, and do not count it against them —
             # the maze has no attempt limit.
             refused += 1
-            if refused >= refused_keys_before_gone:
+            if refused >= REFUSED_KEYS_BEFORE_GONE:
                 # Except that the same refused key, over and over in one room,
                 # is not a caller missing: it is a handset lying on a wedged
                 # key, or anything on the line that keeps decoding as a digit.
@@ -178,7 +178,7 @@ def handle(
                 # the caller has gone. Left unbounded this replays one room
                 # every 15 seconds forever, and `max_depth` cannot stop it,
                 # because a refused key makes no move for it to count (#55).
-                return Walk(outcome="hangup", path=path, nodes_visited=nodes_visited)
+                return _gone(path, nodes_visited)
             arrived = False
             continue
 
@@ -188,6 +188,18 @@ def handle(
         idx = choices[choice]
 
     return _deliver(ctx, code, path, nodes_visited)
+
+
+def _gone(path: list[str], nodes_visited: list[int]) -> Walk:
+    """End the walk on the caller having gone — the one way to leave the maze.
+
+    Silence and a wedged key are the same ending reaching us by two routes, and
+    ``core.flow`` treats what comes back as one thing, so this is one function
+    rather than two returns that happen to agree. The rooms walked before the
+    caller stopped go with it: how far they got is the interesting part of a
+    walk that was abandoned.
+    """
+    return Walk(outcome="hangup", path=path, nodes_visited=nodes_visited)
 
 
 def _deliver(

@@ -558,7 +558,7 @@ class WedgedKeyCallIO(FakeCallIO):
     PATIENCE = 40
 
     def __init__(self, digit: str = "9") -> None:
-        super().__init__(dtmf=[])
+        super().__init__()
         self._digit = digit
 
     def read_dtmf(self, num_digits: int, timeout_ms: int) -> str:
@@ -566,7 +566,9 @@ class WedgedKeyCallIO(FakeCallIO):
             raise AssertionError(
                 f"a wedged key was read {self.PATIENCE} times — the flow is looping"
             )
-        self.read_calls.append((num_digits, timeout_ms))
+        # The read itself is real — the parent records it — and what comes back
+        # is the wedged key rather than the empty queue's silence.
+        super().read_dtmf(num_digits, timeout_ms)
         return self._digit
 
 

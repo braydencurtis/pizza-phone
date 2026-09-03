@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from core.config import write_config
+from core.mode_roguelike import REFUSED_KEYS_BEFORE_GONE
 from engine.call_engine import EXILE_MEDIA, WRONG_MEDIA, CallEngine
 from engine.call_store import CallStore
 from engine.fake_pbx import FakePBX, SilentTTS
@@ -333,9 +334,9 @@ def test_a_wedged_key_in_the_maze_frees_the_booth_for_the_next_caller(tmp_path: 
 
     engine, store, ari, wedged_reads = asyncio.run(run())
     assert engine.active_session is None
-    # The room was replayed a handful of times — the fumble is still forgiven —
-    # and then the call was torn down rather than asked again forever.
-    assert 1 < wedged_reads <= 10
+    # The room was replayed to the bound — the fumble is still forgiven — and
+    # then the call was torn down rather than asked again forever.
+    assert wedged_reads == REFUSED_KEYS_BEFORE_GONE
     assert ("hangup", "chan-1") in ari.calls
     assert ("answer", "chan-2") in ari.calls
     assert ("hangup", "chan-2") not in ari.calls

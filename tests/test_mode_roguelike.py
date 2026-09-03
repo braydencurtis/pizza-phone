@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.mode_roguelike import handle, make_tree
+from core.mode_roguelike import REFUSED_KEYS_BEFORE_GONE, handle, make_tree
 
 
 class MockContext:
@@ -243,10 +243,10 @@ def test_a_wedged_key_ends_the_walk_instead_of_replaying_forever() -> None:
 def test_a_wedged_key_gives_up_after_the_bound_not_before() -> None:
     """The forgiveness is real: the room is asked again, several times over."""
     ctx = WedgedKeyContext()
-    handle(ctx, "1234", seed=42, refused_keys_before_gone=5)
-    assert ctx.reads == 5
+    handle(ctx, "1234", seed=42)
+    assert ctx.reads == REFUSED_KEYS_BEFORE_GONE
     # Every read replayed the room the caller never left.
-    assert len(ctx.spoken) == 5
+    assert len(ctx.spoken) == REFUSED_KEYS_BEFORE_GONE
     assert len(set(ctx.spoken)) == 1
 
 
@@ -266,22 +266,24 @@ def test_a_wedged_key_reports_the_walk_the_caller_actually_made() -> None:
 
 def test_a_key_that_wedges_partway_through_ends_the_walk_where_it_wedged() -> None:
     ctx = MockContext(choices=["1", *["9"] * 40])
-    result = handle(ctx, "1234", seed=42, refused_keys_before_gone=5)
+    result = handle(ctx, "1234", seed=42)
     assert result["outcome"] == "hangup"
     assert result["path"] == ["1"]
-    assert result["nodes_visited"] == handle(MockContext(["1"]), "1234", seed=42)["nodes_visited"]
+    # The room they chose their way into, and the one they wedged in: two.
+    assert len(result["nodes_visited"]) == 2
+    assert result["nodes_visited"][0] == 0
 
 
 def test_the_refused_count_resets_when_the_caller_chooses() -> None:
     """Fumbling in every room is not the same as never choosing in one.
 
-    Four refused keys, a choice, four more, a choice — under a bound of five,
-    this caller is never close to it. Counting refusals across rooms instead of
-    within one would end this walk, and it is a walk.
+    One key short of the bound, then a choice, in every room of the walk. This
+    caller never reaches it. Counting refusals across rooms rather than within
+    one would end this walk in the second room, and it is a walk.
     """
-    fumbler = ["9", "9", "9", "9", "1"] * 5
-    ctx = MockContext(choices=fumbler)
-    result = handle(ctx, "1234", seed=42, refused_keys_before_gone=5)
+    one_room = ["9"] * (REFUSED_KEYS_BEFORE_GONE - 1) + ["1"]
+    ctx = MockContext(choices=one_room * 5)
+    result = handle(ctx, "1234", seed=42)
     assert result["outcome"] == "succeed"
 
 

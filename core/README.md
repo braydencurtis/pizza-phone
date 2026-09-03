@@ -56,8 +56,9 @@ the room, forever, and `max_depth` could not stop it because no move was ever
 made.
 
 A key that *is* pressed but is not a choice is still forgiven — the room is
-replayed and nothing is counted against the caller — but only five times in a
-row in one room, after which the walk ends on the same `hangup` (#55). That
+replayed and nothing is counted against the caller — but not without end: the
+fifth refused key in a row in one room ends the walk on the same `hangup`
+instead of asking a sixth time (#55). That
 bound is liveness, not lives: the maze has nothing to get wrong, so it is not
 counting wrong answers, it is noticing that nobody is choosing. The count resets
 on every key the caller does choose, so fumbling once in each of a dozen rooms

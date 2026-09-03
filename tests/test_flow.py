@@ -534,3 +534,103 @@ def test_a_silent_maze_caller_reports_the_walk_they_actually_made(tmp_path: Path
     flow.run_roguelike(io, _router(tmp_path, mode="roguelike"), observer=observer)
 
     assert [depth for _, depth, _ in observer.nodes] == [0]
+
+
+# -- a wedged key ends a call too (#55) --------------------------------------
+#
+# The other half of the door #53 closed. Silence is the caller gone; a key that
+# *is* pressed but is not one the room offers is a caller fumbling, and stays
+# forgiven. What is not forgiven forever is the same refused key coming back
+# turn after turn in one room — a wedged handset key, or anything on the line
+# decoding as a digit — which replayed that room every 15 seconds for as long as
+# the booth stayed off the hook, holding its one call slot against everybody
+# behind it. The bound is liveness, not lives: it notices nobody is choosing.
+
+
+class WedgedKeyCallIO(FakeCallIO):
+    """A caller whose handset hands back the same refused digit forever.
+
+    Not silence — every read returns a real key — so nothing #53 built catches
+    this one. The patience bound is what makes the bug fail the suite instead of
+    hanging it.
+    """
+
+    PATIENCE = 40
+
+    def __init__(self, digit: str = "9") -> None:
+        super().__init__()
+        self._digit = digit
+
+    def read_dtmf(self, num_digits: int, timeout_ms: int) -> str:
+        if len(self.read_calls) >= self.PATIENCE:
+            raise AssertionError(
+                f"a wedged key was read {self.PATIENCE} times — the flow is looping"
+            )
+        # The read itself is real — the parent records it — and what comes back
+        # is the wedged key rather than the empty queue's silence.
+        super().read_dtmf(num_digits, timeout_ms)
+        return self._digit
+
+
+def test_a_wedged_key_in_the_maze_hangs_up_instead_of_looping(tmp_path: Path) -> None:
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = WedgedKeyCallIO()
+
+    result = flow.run_roguelike(io, router)
+
+    assert result["outcome"] == "hangup"
+    assert io.hung_up is True
+    assert io.succeeded is False
+
+
+def test_a_wedged_key_caller_is_never_read_the_code(tmp_path: Path) -> None:
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = WedgedKeyCallIO()
+
+    flow.run_roguelike(io, router)
+
+    assert not any("0000" in line for line in io.spoken)
+
+
+def test_a_wedged_key_caller_is_not_logged_as_a_played_session(tmp_path: Path) -> None:
+    """Nobody chose anything, so there is no session to judge — as with silence."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+
+    flow.run_roguelike(WedgedKeyCallIO(), router)
+
+    assert _log_lines(tmp_path) == []
+
+
+def test_a_wedged_key_caller_reports_only_the_room_they_stood_in(tmp_path: Path) -> None:
+    observer = RecordingObserver()
+
+    flow.run_roguelike(
+        WedgedKeyCallIO(), _router(tmp_path, mode="roguelike"), observer=observer
+    )
+
+    # The room is replayed — the caller really is hearing it again — but they
+    # never left it, so every report is the same room at the same depth.
+    assert {(node, depth) for node, depth, _ in observer.nodes} == {(0, 0)}
+
+
+def test_the_booth_takes_the_next_caller_after_a_wedged_key(tmp_path: Path) -> None:
+    """The point of the bound: the slot is free again without a restart."""
+    wedged = WedgedKeyCallIO()
+    flow.run_roguelike(wedged, _router(tmp_path, mode="roguelike", code="0000"))
+
+    after = FakeCallIO(dtmf=["1"] * 40)
+    result = flow.run_roguelike(after, _router(tmp_path, mode="roguelike", code="0000"))
+
+    assert result["outcome"] == "succeed"
+    assert after.succeeded is True
+
+
+def test_a_fat_finger_in_every_room_is_still_forgiven(tmp_path: Path) -> None:
+    """Fumbling once per room is not a wedged key, however many rooms there are."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = FakeCallIO(dtmf=["9", "1", "0", "1", "9", "1", "#", "1", *["1"] * 40])
+
+    result = flow.run_roguelike(io, router)
+
+    assert result["outcome"] != "hangup"
+    assert any("hang up and dial" in line.lower() for line in io.spoken)

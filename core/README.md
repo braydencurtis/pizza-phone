@@ -53,7 +53,18 @@ owns one call at a time, so a mode that kept asking an empty booth would hold
 the slot and hang up on every caller behind it. That is what the Roguelike
 Phone-Tree did until #53: it read silence as an unrecognised key and replayed
 the room, forever, and `max_depth` could not stop it because no move was ever
-made. A key that *is* pressed but is not a choice is still forgiven.
+made.
+
+A key that *is* pressed but is not a choice is still forgiven — the room is
+replayed and nothing is counted against the caller — but not without end: the
+fifth refused key in a row in one room ends the walk on the same `hangup`
+instead of asking a sixth time (#55). That
+bound is liveness, not lives: the maze has nothing to get wrong, so it is not
+counting wrong answers, it is noticing that nobody is choosing. The count resets
+on every key the caller does choose, so fumbling once in each of a dozen rooms
+never approaches it, while a handset lying on a wedged key — the one thing
+`max_depth` could no more stop than it could stop silence, since a refused key
+makes no move — stops holding the booth.
 
 The other way a caller leaves — putting the handset down while a prompt plays —
 never reaches these functions at all: the channel dies, the next ARI command

@@ -16,7 +16,10 @@ Silence means the same thing in all three Modes: an empty ``read_dtmf`` is the
 caller having gone, so the call is torn down and the session ends on
 ``hangup``. It is the caller's commonest ending — a handset put down, or left
 off the hook — and the booth holds one call at a time, so a Mode that kept
-asking an empty booth would hang up on everybody behind it (#53).
+asking an empty booth would hang up on everybody behind it (#53). The maze
+reaches the same ending by one further route, since a handset can be put down
+badly as well as quietly: a key it holds down that the room never offers is
+nobody choosing, and the walker gives up on it (#55).
 
 Each function also takes an optional :class:`~core.observer.CallObserver` (#37).
 These functions return exactly once, at the terminal outcome, so without it
@@ -101,17 +104,20 @@ def run_roguelike(
 
     A caller who goes silent in the maze ends the call, exactly as they do in
     the other two Modes — see the walker for why the maze could not stop them
-    on its own (#53).
+    on its own (#53). The walker returns the same ``hangup`` for a line that
+    keeps handing back a key the room does not offer (#55); both arrive here as
+    a walk nobody played, and are treated as one.
     """
     ctx = _RoguelikeCallIOContext(io, choice_timeout_ms)
     walk = mode_roguelike.handle(ctx, router.config.code, observer=observer)
 
     if walk["outcome"] == "hangup":
         # Not dispatched and not logged, exactly as in ``_run_code_entry``:
-        # nobody played, so there is no session to judge. The engine still
-        # persists the call as a hangup, and the rooms the caller got through
-        # before leaving go with it — how far they got is the interesting part
-        # of a walk that was abandoned.
+        # nobody played, so there is no session to judge — whether they went
+        # silent or spent the call on a key the room does not offer. The engine
+        # still persists the call as a hangup, and the rooms the caller got
+        # through before leaving go with it — how far they got is the
+        # interesting part of a walk that was abandoned.
         return _caller_left(
             io,
             mode=router.config.mode,
@@ -185,12 +191,14 @@ def _run_code_entry(
 
 
 def _caller_left(io: CallIO, **detail: Any) -> dict[str, Any]:
-    """The caller went quiet: tear the call down and end the session on ``hangup``.
+    """The caller stopped playing: tear the call down and end the session on ``hangup``.
 
-    The one place silence becomes an outcome, so the rule CONTEXT.md states —
-    silence ends a Call Session in every Mode — is one rule rather than three
-    that happen to agree. What each Mode knows about the abandoned call differs
-    (attempts burned, rooms walked), so that rides along in ``detail``.
+    The one place a caller's absence becomes an outcome, so the rule CONTEXT.md
+    states — silence ends a Call Session in every Mode — is one rule rather than
+    three that happen to agree. The maze reaches it by one further route, a key
+    it can only read as nobody choosing (#55). What each Mode knows about the
+    abandoned call differs (attempts burned, rooms walked), so that rides along
+    in ``detail``.
     """
     io.hangup()
     return {"outcome": "hangup", **detail}

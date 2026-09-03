@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from core.config import write_config
+from core.mode_roguelike import REFUSED_KEYS_BEFORE_GONE
 from engine.call_engine import EXILE_MEDIA, WRONG_MEDIA, CallEngine
 from engine.call_store import CallStore
 from engine.fake_pbx import FakePBX, SilentTTS
@@ -274,6 +275,77 @@ def test_a_silent_roguelike_caller_frees_the_booth_for_the_next_one(tmp_path: Pa
     silent = asyncio.run(store.query(outcome="hangup"))
     assert len(silent) == 1
     assert silent[0].mode == "roguelike"
+
+
+class WedgedKeyPBX(FakePBX):
+    """A handset with a key stuck down: every read hands back the same digit.
+
+    Not an exhausted script — that is silence, and silence has been an ending
+    since #53. This caller presses a real key, forever, and the maze offers only
+    "1" and "2", so before #55 the room replayed for as long as the handset lay
+    there. The patience bound makes that fail the suite rather than hang it.
+    """
+
+    PATIENCE = 40
+
+    def __init__(self, digit: str = "9") -> None:
+        super().__init__()
+        self._digit = digit
+        # Public: clearing it is somebody putting the handset back, which is how
+        # the second caller in the test below gets a working phone.
+        self.wedged = True
+        self.reads = 0
+
+    async def read_digits(
+        self, channel_id: str, num_digits: int, inter_digit_timeout_ms: int
+    ) -> str:
+        if not self.wedged:
+            return await super().read_digits(channel_id, num_digits, inter_digit_timeout_ms)
+        self.reads += 1
+        if self.reads > self.PATIENCE:
+            raise AssertionError(
+                f"a wedged key was read {self.PATIENCE} times — the engine is looping"
+            )
+        await self.fire_dtmf(channel_id, self._digit)
+        return self._digit
+
+
+def test_a_wedged_key_in_the_maze_frees_the_booth_for_the_next_caller(tmp_path: Path) -> None:
+    """The other half of the bricked booth (#55).
+
+    #53 stopped a silent caller holding the slot; a caller whose key is wedged on
+    a digit the room does not offer walked the same infinite loop, because a
+    refused key makes no move and ``max_depth`` bounds moves. Same test shape,
+    same thing at stake: the second caller must be taken.
+    """
+
+    async def run() -> Any:
+        ari = WedgedKeyPBX()
+        engine, store = await _engine(tmp_path, ari, mode="roguelike", code="0000")
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+
+        wedged_reads = ari.reads
+        ari.wedged = False  # the handset is put back on its cradle
+        ari.script(["1"] * 40)  # the next caller actually plays
+        await ari.fire_stasis_start("chan-2")
+        await engine.wait_for_idle()
+        return engine, store, ari, wedged_reads
+
+    engine, store, ari, wedged_reads = asyncio.run(run())
+    assert engine.active_session is None
+    # The room was replayed to the bound — the fumble is still forgiven — and
+    # then the call was torn down rather than asked again forever.
+    assert wedged_reads == REFUSED_KEYS_BEFORE_GONE
+    assert ("hangup", "chan-1") in ari.calls
+    assert ("answer", "chan-2") in ari.calls
+    assert ("hangup", "chan-2") not in ari.calls
+
+    records = asyncio.run(store.query())
+    assert len(records) == 2, "both callers were taken"
+    wedged = asyncio.run(store.query(outcome="hangup"))
+    assert len(wedged) == 1
+    assert wedged[0].mode == "roguelike"
 
 
 def test_second_call_while_busy_is_hung_up(tmp_path: Path) -> None:

@@ -20,12 +20,16 @@ this code did not.
   against, taken at pickup, plus the atomic `write_config` every Operator write
   goes through.
 - `router.py` — `Router.dispatch`: evaluate an attempt against the session's
-  Config Snapshot and log the call-session record.
+  Config Snapshot and log the call-session record. Tweeted and Audio Puzzle Mode
+  only — it refuses the maze, which has no attempts to judge (below).
 - `mode_tweeted.py` / `mode_puzzle.py` / `mode_roguelike.py` — per-mode logic;
   `mode_puzzle` also holds `PuzzleSelector`; `mode_roguelike` holds tree
   generation + navigation, and returns a `Walk` — where the caller went and
-  which of the three ways it ended.
-- `headless.py` — headless roguelike walker (used by the router and tooling).
+  which of the three ways it ended — plus `moves_made`, the one derivation of
+  the number every maze record is counted in.
+- `headless.py` — maze **simulator**: walks the tree with nobody on the phone,
+  for measuring it in bulk. Reachable from no live call path; until #56 the
+  router ran it on every roguelike call and logged its walk as the caller's.
 - `tts.py` — text-to-speech backends (espeak / flite / macOS `say`).
 - `code_manager.py` — field-level edits to Global Config (rotate the code,
   switch the mode), atomic via `config.py`.
@@ -56,9 +60,28 @@ walk ended. It was not a rare rail: pressing one key repeatedly follows a fixed
 chain through the rooms, and that chain usually closes into a loop of two or
 three, so most callers who mash a single key end there rather than at the leaf.
 CONTEXT.md's *Walking the maze out* row holds the measurements, and is the one
-place they live. `flow._walked_out` logs the session, where `flow._caller_left` does
-not — the distinction being that an Exiled caller played the game and lost it,
-where the other walked away from it. See #59.
+place they live. `flow._walk_played` logs the session, where `flow._caller_left`
+does not — the distinction being that an Exiled caller played the game and lost
+it, where the other walked away from it. See #59.
+
+## A walk is recorded as the walk it was
+
+Both endings a caller can *play* to go through `flow._walk_played`, and the record
+it writes is the `Walk` itself: their keys, their rooms, and the ending the
+walker gave them. Nothing is judged there, because the walker settled the
+outcome as the caller walked — which is why `Router.dispatch` refuses roguelike
+outright rather than having a branch for it.
+
+It used to have one, and that branch is the bug #56 fixes. It called
+`core.headless` and *simulated a whole fresh random walk on a whole fresh tree*,
+then reported that as the caller's session. So a won call was logged and
+persisted under a stranger's rooms — and logged as won whatever the caller had
+done, because a simulated walker with unlimited patience always reaches a leaf.
+Only the Exile and hangup endings, which `flow` intercepted before dispatching,
+held the truth. `attempts` on a maze record is `mode_roguelike.moves_made` —
+one derivation, because every maze record counts in the same unit whether the
+walk was won, Exiled or abandoned; see CONTEXT.md's *A roguelike record* row for
+what the Console does with that.
 
 ## Silence ends a call
 

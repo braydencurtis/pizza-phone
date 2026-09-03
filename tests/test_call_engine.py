@@ -28,6 +28,7 @@ from core.mode_roguelike import REFUSED_KEYS_BEFORE_GONE
 from engine.call_engine import EXILE_MEDIA, WRONG_MEDIA, CallEngine
 from engine.call_store import CallStore
 from engine.fake_pbx import FakePBX, SilentTTS
+from tests.mazes import CYCLING_SEED, WINNING_KEYS_ON_CYCLING_TREE
 
 
 def _write_config(config_dir: Path, **config: Any) -> None:
@@ -364,12 +365,14 @@ def test_a_maze_caller_who_never_finds_the_room_is_persisted_as_exiled(
 
     The tree is regenerated per Call Session and nothing above ``core.flow``
     passes a seed, so which ending a synthetic caller reaches is otherwise a
-    roll of the dice. Seed 0 is a tree where pressing "1" every time closes into
-    a loop of two rooms — the caller who mashes one key, which is who mostly
-    ends up here — so this pins the common case rather than an exotic one.
+    roll of the dice. ``CYCLING_SEED`` is a tree where pressing "1" every time
+    closes into a loop of two rooms — the caller who mashes one key, which is
+    who mostly ends up here — so this pins the common case, not an exotic one.
     """
     make_tree = mode_roguelike.make_tree
-    monkeypatch.setattr(mode_roguelike, "make_tree", lambda seed=None: make_tree(seed=0))
+    monkeypatch.setattr(
+        mode_roguelike, "make_tree", lambda seed=None: make_tree(seed=CYCLING_SEED)
+    )
 
     async def run() -> Any:
         ari = FakePBX(dtmf=["1"] * 40)
@@ -390,6 +393,42 @@ def test_a_maze_caller_who_never_finds_the_room_is_persisted_as_exiled(
     # so nothing may route them at the Upstairs Phone.
     assert ("hangup", "chan-1") in ari.calls
     assert not any(c[0] == "continue" for c in ari.calls)
+
+
+def test_a_won_maze_call_persists_the_walk_the_caller_actually_made(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end (#56): the record holds the keys the caller pressed.
+
+    The engine used to file this call under a walk nobody made — ``dispatch``
+    reached ``core.headless`` and simulated a fresh random walk on a fresh tree,
+    and *that* is what landed in the store. ``CYCLING_SEED`` is the tree the
+    test above Exiles a key-masher on, which is what makes this pair the whole
+    point: same tree, and only the caller's own keys separate win from loss.
+    """
+    make_tree = mode_roguelike.make_tree
+    monkeypatch.setattr(
+        mode_roguelike, "make_tree", lambda seed=None: make_tree(seed=CYCLING_SEED)
+    )
+    pressed = WINNING_KEYS_ON_CYCLING_TREE
+
+    async def run() -> Any:
+        ari = FakePBX(dtmf=list(pressed))
+        engine, store = await _engine(tmp_path, ari, mode="roguelike", code="8675")
+        await ari.fire_stasis_start("chan-1")
+        await engine.wait_for_idle()
+        return store, ari
+
+    store, ari = asyncio.run(run())
+    records = asyncio.run(store.query())
+    assert len(records) == 1
+    assert records[0].mode == "roguelike"
+    assert records[0].outcome == "succeed"
+    # The rooms they walked, key for key, and the move count that goes with it.
+    assert records[0].detail["path"] == pressed
+    assert records[0].attempts == len(pressed)
+    # A win is a hand-off, never a hangup: they were read the Code.
+    assert any(c[0] == "continue" for c in ari.calls)
 
 
 def test_second_call_while_busy_is_hung_up(tmp_path: Path) -> None:

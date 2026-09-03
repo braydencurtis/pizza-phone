@@ -52,6 +52,20 @@ class Walk(TypedDict):
     nodes_visited: list[int]
 
 
+def moves_made(walk: Walk) -> int:
+    """How many moves the caller made — the number the Walk Bound counts.
+
+    One derivation because it is one concept, and it is the concept every
+    record of a maze call is counted in: it is what a walk's ``attempts``
+    means, won or Exiled or abandoned, since the Roguelike Phone-Tree has no
+    attempts of the kind the other two Modes mean (CONTEXT.md, *A roguelike
+    record*). A Refused Key is not a move, which is exactly why this is the
+    keys pressed and not the rooms stood in — there is always one more room
+    than moves, because nobody walks into the mouth of the maze.
+    """
+    return len(walk["path"])
+
+
 def _is_terminal(node: Node) -> TypeGuard[TerminalNode]:
     return "choices" not in cast(dict, node)
 

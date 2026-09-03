@@ -23,6 +23,7 @@ import { useEffect } from "react";
 import { logout } from "./api";
 import { formatElapsed, useCountdown, useElapsed } from "./elapsed";
 import {
+  finalCountLabel,
   MODE_LABELS,
   SNAPSHOT_SCHEMA_VERSION,
   STATE_COPY,
@@ -270,13 +271,17 @@ function LiveCall({ call, stale }: { call: CallView; stale: boolean }) {
  * caller on the line is one wrong answer from Exile when they have three left.
  *
  * During the call it counts up; afterwards it settles to what the handler
- * actually returned, which is the number that was logged.
+ * actually returned, which is the number that was logged — and takes the Mode's
+ * own name for it, since a finished maze call's number is rooms and not
+ * attempts (`finalCountLabel`, #56). Only the live half has a limit to count
+ * towards: the maze has none, so the live half of this simply does not render
+ * for it, and the Maze line below carries the walk instead.
  */
 function Attempts({ call, over }: { call: CallView; over: boolean }) {
   if (over) {
     return (
       <div>
-        <dt>Attempts</dt>
+        <dt>{finalCountLabel(call.mode)}</dt>
         <dd>{call.attempts}</dd>
       </div>
     );

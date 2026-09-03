@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core import flow
+import pytest
+
+from core import flow, mode_roguelike
 from core.config import take_snapshot, write_config
 from core.router import Router
+from tests.mazes import CYCLING_SEED, SOLVING_SEED, WINNING_KEYS_ON_CYCLING_TREE
 
 
 class FakeCallIO:
@@ -195,12 +198,7 @@ def test_puzzle_exile_after_max_attempts(tmp_path: Path) -> None:
 #
 # The tree is regenerated per Call Session, so a walk on an unseeded tree can
 # end either way — and since #59 the two endings differ. Every test that cares
-# which one it got seeds the tree. `SOLVING_SEED` is a tree where pressing "1"
-# every time walks into the room holding the Code; `CYCLING_SEED` is one where
-# the same caller closes into a loop of two rooms and never finds it.
-
-SOLVING_SEED = 42
-CYCLING_SEED = 0
+# which one it got seeds the tree; `tests/mazes.py` says which tree is which.
 
 
 def test_roguelike_navigates_and_routes_to_success(tmp_path: Path) -> None:
@@ -654,10 +652,7 @@ def test_a_fat_finger_in_every_room_is_still_forgiven(tmp_path: Path) -> None:
 # pressing keys it offered. It is Exile now: a flavoured disconnect, no Code,
 # and a *logged* session, because unlike a hangup this caller played and lost.
 #
-# The tree is random per call, so these seed it. `CYCLING_SEED` is a tree where
-# pressing "1" every time closes into a loop of two rooms — the caller mashing
-# one key, which is who mostly ends up here — and `SOLVING_SEED` is one where
-# the same caller walks into the room that holds the Code.
+# The tree is random per call, so these seed it — see `tests/mazes.py`.
 
 def test_running_the_maze_out_exiles_the_caller(tmp_path: Path) -> None:
     router = _router(tmp_path, mode="roguelike", code="0000")
@@ -725,3 +720,97 @@ def test_a_caller_who_leaves_mid_maze_is_gone_not_exiled(tmp_path: Path) -> None
 
     assert result["outcome"] == "hangup"
     assert _log_lines(tmp_path) == []
+
+
+# -- a won walk is the caller's own (#56) ------------------------------------
+#
+# `Router.dispatch` used to reach `core.headless` for roguelike and simulate a
+# whole fresh walk on a whole fresh tree, picking each key at random, and the
+# record it built from that simulation was what got logged and persisted. So a
+# won maze call carried a path nobody walked, and — because the simulated
+# walker always reached a leaf — an outcome that was `succeed` whatever the
+# caller had done. `CYCLING_SEED` is the sharpest tree to show this on: mashing
+# "1" loops there forever, so the keys below are the only reason this walk wins.
+
+WINNING_KEYS = WINNING_KEYS_ON_CYCLING_TREE
+
+
+def test_a_won_walk_records_the_keys_the_caller_pressed(tmp_path: Path) -> None:
+    router = _router(tmp_path, mode="roguelike", code="0000")
+
+    result = flow.run_roguelike(
+        FakeCallIO(dtmf=WINNING_KEYS), router, seed=CYCLING_SEED
+    )
+
+    assert result["outcome"] == "succeed"
+    assert result["path"] == WINNING_KEYS
+    assert _log_lines(tmp_path)[0]["path"] == WINNING_KEYS
+
+
+def test_a_won_walk_records_the_rooms_the_caller_stood_in(tmp_path: Path) -> None:
+    """The rooms go to the history, as they already did for an Exiled walk."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+
+    flow.run_roguelike(FakeCallIO(dtmf=WINNING_KEYS), router, seed=CYCLING_SEED)
+
+    assert _log_lines(tmp_path)[0]["nodes_visited"] == [0, 3, 1, 4, 5]
+
+
+def test_attempts_on_a_won_walk_is_the_moves_the_caller_made(tmp_path: Path) -> None:
+    """`attempts` is the maze's move count — what the Walk Bound counts."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+
+    result = flow.run_roguelike(
+        FakeCallIO(dtmf=WINNING_KEYS), router, seed=CYCLING_SEED
+    )
+
+    assert result["attempts"] == len(WINNING_KEYS)
+    assert _log_lines(tmp_path)[0]["attempts"] == len(WINNING_KEYS)
+
+
+def test_the_same_tree_wins_or_exiles_on_the_caller_s_keys_alone(tmp_path: Path) -> None:
+    """The inversion #56 fixes, in one test: one tree, two callers, two endings.
+
+    Under the simulation both of these were `succeed`, both carried a random
+    walker's path, and the history could not tell them apart.
+    """
+    won = flow.run_roguelike(
+        FakeCallIO(dtmf=WINNING_KEYS),
+        _router(tmp_path, mode="roguelike", code="0000"),
+        seed=CYCLING_SEED,
+    )
+    masher = flow.run_roguelike(
+        FakeCallIO(dtmf=["1"] * 40),
+        _router(tmp_path, mode="roguelike", code="0000"),
+        seed=CYCLING_SEED,
+    )
+
+    assert [won["outcome"], masher["outcome"]] == ["succeed", "exile"]
+    assert won["path"] != masher["path"]
+
+
+def test_no_walk_is_simulated_during_a_live_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One tree per Call Session — the caller's. The second one was the bug.
+
+    Counting `make_tree` is the cheapest way to say "nothing walked a maze
+    behind the caller's back": the simulation could not run without building
+    itself a tree first.
+    """
+    built: list[int | None] = []
+    real = mode_roguelike.make_tree
+
+    def counting_make_tree(seed: int | None = None) -> list[mode_roguelike.Node]:
+        built.append(seed)
+        return real(seed=seed)
+
+    monkeypatch.setattr(mode_roguelike, "make_tree", counting_make_tree)
+
+    flow.run_roguelike(
+        FakeCallIO(dtmf=WINNING_KEYS),
+        _router(tmp_path, mode="roguelike", code="0000"),
+        seed=CYCLING_SEED,
+    )
+
+    assert built == [CYCLING_SEED]

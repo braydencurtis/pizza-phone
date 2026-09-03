@@ -9,7 +9,6 @@ from typing import Any
 
 from core import mode_puzzle, mode_tweeted
 from core.config import ConfigSnapshot
-from core.headless import run_roguelike
 from core.logger import CallSessionLogger
 from core.types import Outcome
 
@@ -24,6 +23,16 @@ class Router:
     snapshot. (Before #34 the router re-read ``mode.json`` per attempt, and a
     rotation mid-call failed callers for correctly answering the riddle they had
     just been played.)
+
+    **Attempts, and only attempts.** An attempt is a set of digits offered
+    against the Code, so this judges the two Modes that have them and refuses
+    the Roguelike Phone-Tree, which has none: a Walk's outcome is decided by the
+    walker as the caller makes it, and ``core.flow`` builds the record from that
+    Walk. Until #56 this branch answered anyway, by simulating a whole fresh
+    random walk on a whole fresh tree — so the path and the room count that got
+    logged and persisted were a stranger's, and the outcome was ``succeed``
+    however the real caller's walk had gone. The logger is still shared, because
+    it is the Call Session's, not this method's.
     """
 
     config: ConfigSnapshot
@@ -37,12 +46,16 @@ class Router:
         self,
         code_attempt: str | None = None,
         answer: str | None = None,
-        path: list[str] | None = None,
         attempt: int = 1,
         puzzle_id: str | None = None,
         log: bool = True,
     ) -> dict[str, Any]:
         mode = self.config.mode
+        if mode == "roguelike":
+            raise ValueError(
+                "roguelike walks are not dispatched: the walker decides a Walk's "
+                "outcome and core.flow records it (#56)"
+            )
         if mode == "puzzle" and not puzzle_id:
             raise ValueError("puzzle_id is required for puzzle mode")
 
@@ -52,7 +65,7 @@ class Router:
 
         if mode == "tweeted":
             handler_result = mode_tweeted.handle(code_attempt or "", code, attempt, max_attempts)
-        elif mode == "puzzle":
+        else:
             assert puzzle_id is not None
             handler_result = mode_puzzle.handle(
                 answer=answer or "",
@@ -61,8 +74,6 @@ class Router:
                 max_attempts=max_attempts,
                 puzzle_id=puzzle_id,
             )
-        else:
-            handler_result = run_roguelike(code)
 
         duration = round(time.monotonic() - start, 3)
         outcome: Outcome = handler_result["outcome"]
@@ -73,8 +84,6 @@ class Router:
             "outcome": outcome,
             "duration": duration,
             "attempts": handler_result.get("attempts", 0),
-            "path": handler_result.get("path", []),
-            "nodes_visited": handler_result.get("nodes_visited", []),
         }
         if puzzle_id:
             session["puzzle_id"] = puzzle_id
@@ -86,6 +95,5 @@ class Router:
             "outcome": outcome,
             "attempts": handler_result.get("attempts", 0),
             "duration": duration,
-            "path": handler_result.get("path", []),
             "puzzle_id": handler_result.get("puzzle_id", ""),
         }

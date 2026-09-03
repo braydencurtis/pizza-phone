@@ -14,7 +14,9 @@ supplied by the caller because their naming is driver-specific — see
 
 The maze is the one Mode a caller can lose without getting anything wrong: a
 walk that runs out its bound without finding the room ends in Exile, where it
-used to be handed the Code anyway (#59).
+used to be handed the Code anyway (#59). It is also the one Mode the ``Router``
+does not judge, because it has no attempts to judge — the walker settles the
+outcome as the caller walks, and ``_walk_played`` writes that Walk down (#56).
 
 Silence means the same thing in all three Modes: an empty ``read_dtmf`` is the
 caller having gone, so the call is torn down and the session ends on
@@ -108,12 +110,14 @@ def run_roguelike(
 ) -> dict[str, Any]:
     """Roguelike mode: navigate the phone-tree, and win only by finding the room.
 
-    Three endings, all of them the walker's (``mode_roguelike.Walk``). Reaching
-    the leaf is the win. Walking the bound out without finding it is Exile, and
-    is a call the caller *played and lost* — so unlike the third ending it is
-    logged (#59). A caller who stops choosing — silent, or holding a key the
-    room does not offer — has gone, exactly as in the other two Modes (#53,
-    #55); that arrives here as a walk nobody played.
+    Three endings, all of them the walker's (``mode_roguelike.Walk``), and the
+    record is that Walk whichever one it reached — the caller's own keys and
+    rooms, never a simulation's (#56). Reaching the leaf is the win. Walking the
+    bound out without finding it is Exile, and is a call the caller *played and
+    lost* — so like the win and unlike the third ending it is logged (#59). A
+    caller who stops choosing — silent, or holding a key the room does not offer
+    — has gone, exactly as in the other two Modes (#53, #55); that arrives here
+    as a walk nobody played.
 
     ``seed`` pins the tree, which is otherwise regenerated per Call Session.
     Nothing in the engine passes one — it is how a test gets a walk it can
@@ -125,29 +129,21 @@ def run_roguelike(
     started = time.monotonic()
     walk = mode_roguelike.handle(ctx, router.config.code, seed=seed, observer=observer)
 
-    if walk["outcome"] == "exile":
-        return _walked_out(io, router, walk, round(time.monotonic() - started, 3))
-
     if walk["outcome"] == "hangup":
-        # Not dispatched and not logged, exactly as in ``_run_code_entry``:
-        # nobody played, so there is no session to judge — whether they went
-        # silent or spent the call on a key the room does not offer. The engine
-        # still persists the call as a hangup, and the rooms the caller got
-        # through before leaving go with it — how far they got is the
-        # interesting part of a walk that was abandoned.
+        # Not recorded as a session and not logged, exactly as in
+        # ``_run_code_entry``: nobody played, so there is nothing to write down
+        # as a game — whether they went silent or spent the call on a key the
+        # room does not offer. The engine still persists the call as a hangup,
+        # and the rooms the caller got through before leaving go with it — how
+        # far they got is the interesting part of a walk that was abandoned.
         return _caller_left(
             io,
             mode=router.config.mode,
-            attempts=len(walk["path"]),
+            attempts=mode_roguelike.moves_made(walk),
             path=walk["path"],
         )
 
-    result = router.dispatch()
-    if result["outcome"] == "succeed":
-        io.to_success()
-    else:
-        io.hangup()
-    return result
+    return _walk_played(io, router, walk, round(time.monotonic() - started, 3))
 
 
 def _run_code_entry(
@@ -207,30 +203,45 @@ def _run_code_entry(
     return result
 
 
-def _walked_out(
+def _walk_played(
     io: CallIO, router: Router, walk: mode_roguelike.Walk, duration: float
 ) -> dict[str, Any]:
-    """The maze beat the caller: the ending has been spoken, so tear it down.
+    """The caller played the maze to one of its two endings: record what they did.
+
+    Both endings come through here, and the record is the walk — the keys they
+    pressed, the rooms they stood in, and which ending the walker gave them.
+    The win used to go through ``Router.dispatch`` instead, which for roguelike
+    simulated a fresh random walk on a fresh tree and reported *that*: a won
+    call was persisted under a stranger's rooms, and was persisted as a win
+    however the caller's own walk had gone, because the simulation always
+    reached a leaf (#56). Nothing here is judged, because there is nothing left
+    to judge — the walker settled the outcome as the caller walked.
 
     Logged, where ``_caller_left`` is not, and that is the whole distinction
-    between the two: this caller played the game and lost it, where the other
-    walked away from it. The record is built from the walk itself rather than
-    through ``Router.dispatch``, which for roguelike simulates a fresh random
-    walk and would file this loss under somebody else's rooms (#56).
+    between them: this caller played the game, where the other walked away from
+    it. ``attempts`` is ``mode_roguelike.moves_made`` — the same derivation
+    ``_caller_left`` uses for an abandoned walk, because it is the same number:
+    the Roguelike Phone-Tree has no attempts of the kind the other two Modes
+    mean, so the column carries moves instead and the Console labels it Rooms
+    (CONTEXT.md, *A roguelike record*).
     """
     result: dict[str, Any] = {
         "mode": router.config.mode,
-        "outcome": "exile",
-        "attempts": len(walk["path"]),
+        "outcome": walk["outcome"],
+        "attempts": mode_roguelike.moves_made(walk),
         "duration": duration,
         "path": walk["path"],
     }
-    # ``nodes_visited`` is logged but not returned, which is how ``dispatch``
-    # splits them too: the rooms are for the history, not for the engine.
+    # ``nodes_visited`` is logged but not returned: the rooms are for the
+    # history, and the engine has no use for them mid-call — the Console
+    # already watched the caller enter each one on the CallObserver seam.
     router.logger.log(
         {**result, "nodes_visited": walk["nodes_visited"], "timestamp": datetime.now(UTC)}
     )
-    io.hangup()
+    if walk["outcome"] == "succeed":
+        io.to_success()
+    else:
+        io.hangup()
     return result
 
 

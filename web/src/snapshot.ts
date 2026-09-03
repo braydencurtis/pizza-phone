@@ -111,6 +111,21 @@ export const MODE_LABELS: Record<Mode, string> = {
   roguelike: "Roguelike Phone-Tree",
 };
 
+/**
+ * What `CallView.attempts` is *called* for a finished call, which depends on
+ * the Mode because the number does.
+ *
+ * In Tweeted and Audio Puzzle Mode it is attempts in the sense the Attempt
+ * Limit means: answers offered against the Code, and the count that runs a
+ * caller into Exile. The Roguelike Phone-Tree has no such thing — there is
+ * nothing in the maze to get wrong and no limit to burn — so the column carries
+ * the moves the caller made instead, the number the Walk Bound counts. Labelling
+ * that "Attempts" would read as four wrong answers where it means four rooms.
+ */
+export function finalCountLabel(mode: Mode | null): string {
+  return mode === "roguelike" ? "Rooms" : "Attempts";
+}
+
 /** How each state reads on the panel: its headline, and what it actually means. */
 export const STATE_COPY: Record<CallState, { label: string; note: string }> = {
   answering: {
@@ -129,7 +144,9 @@ export const STATE_COPY: Record<CallState, { label: string; note: string }> = {
   },
   exiled: {
     label: "Exiled",
-    note: "They burned the Attempt Limit and heard the Exile message.",
+    note:
+      "They lost and heard the Exile message — the Attempt Limit burned, or " +
+      "the maze walked out to its bound without ever finding the Code.",
   },
   hung_up: {
     label: "Hung up",

@@ -66,15 +66,27 @@ class TestRouter:
         except ValueError as e:
             assert "puzzle_id" in str(e)
 
-    def test_dispatches_to_roguelike(self, tmp_path: Path) -> None:
+    def test_a_roguelike_walk_is_not_dispatched(self, tmp_path: Path) -> None:
+        """The maze has no attempt to judge, so the router refuses it (#56).
+
+        It used to answer by simulating a fresh random walk on a fresh tree and
+        reporting *that* as the caller's session — a path nobody walked, and a
+        win whatever the caller did. The walker decides a Walk's outcome; the
+        record is built from the Walk in ``core.flow``.
+        """
         config_dir = tmp_path / "config"
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
         _write_config(config_dir, mode="roguelike", code="0000")
 
         router = _make_router(config_dir, log_dir)
-        result = router.dispatch(path=[])
-        assert result["mode"] == "roguelike"
+        try:
+            router.dispatch(code_attempt="0000")
+            assert False, "Expected ValueError"
+        except ValueError as e:
+            assert "roguelike" in str(e)
+
+        assert list(log_dir.glob("calls-*.jsonl")) == []
 
     def test_logs_session_after_dispatch(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"

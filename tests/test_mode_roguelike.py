@@ -196,3 +196,100 @@ def test_the_depth_bound_still_delivers_the_code() -> None:
     result = handle(ctx, "1234", seed=42, max_depth=1)
     assert result["outcome"] == "succeed"
     assert any("1234" in line for line in ctx.spoken)
+
+
+# -- a key that never becomes a choice ends the walk too (#55) ---------------
+#
+# #53 settled silence; this is the other half. A key that *is* pressed but is
+# not one the room offers is forgiven — the room is replayed, nothing is counted
+# against the caller — and forgiving it without end is what made it a hazard: a
+# wedged key on the handset, or anything on the line that keeps decoding as one,
+# replays the same room every 15 seconds forever. `max_depth` bounds moves made,
+# and a refused key makes no move, so it could no more stop this than it could
+# stop the silent caller. The bound below is liveness, not lives: it is not
+# counting wrong answers — the maze has none — it is noticing nobody is
+# choosing.
+
+
+class WedgedKeyContext(MockContext):
+    """A caller whose handset hands back the same refused digit forever.
+
+    The patience bound is what makes the bug fail the suite rather than hang it:
+    unbounded, the walker asks this caller until the heat death of the booth.
+    """
+
+    PATIENCE = 40
+
+    def __init__(self, digit: str = "9") -> None:
+        super().__init__(choices=[])
+        self._digit = digit
+        self.reads = 0
+
+    def read_choice(self, keys: str) -> str:
+        self.reads += 1
+        if self.reads > self.PATIENCE:
+            raise AssertionError(
+                f"a wedged key was read {self.PATIENCE} times — the walk is looping"
+            )
+        return self._digit
+
+
+def test_a_wedged_key_ends_the_walk_instead_of_replaying_forever() -> None:
+    ctx = WedgedKeyContext()
+    result = handle(ctx, "1234", seed=42)
+    assert result["outcome"] == "hangup"
+
+
+def test_a_wedged_key_gives_up_after_the_bound_not_before() -> None:
+    """The forgiveness is real: the room is asked again, several times over."""
+    ctx = WedgedKeyContext()
+    handle(ctx, "1234", seed=42, refused_keys_before_gone=5)
+    assert ctx.reads == 5
+    # Every read replayed the room the caller never left.
+    assert len(ctx.spoken) == 5
+    assert len(set(ctx.spoken)) == 1
+
+
+def test_a_wedged_key_caller_is_not_read_the_code() -> None:
+    ctx = WedgedKeyContext()
+    handle(ctx, "1234", seed=42)
+    assert not any("1234" in line for line in ctx.spoken)
+
+
+def test_a_wedged_key_reports_the_walk_the_caller_actually_made() -> None:
+    """They never left the first room, so that is the whole walk."""
+    ctx = WedgedKeyContext()
+    result = handle(ctx, "1234", seed=42)
+    assert result["path"] == []
+    assert result["nodes_visited"] == [0]
+
+
+def test_a_key_that_wedges_partway_through_ends_the_walk_where_it_wedged() -> None:
+    ctx = MockContext(choices=["1", *["9"] * 40])
+    result = handle(ctx, "1234", seed=42, refused_keys_before_gone=5)
+    assert result["outcome"] == "hangup"
+    assert result["path"] == ["1"]
+    assert result["nodes_visited"] == handle(MockContext(["1"]), "1234", seed=42)["nodes_visited"]
+
+
+def test_the_refused_count_resets_when_the_caller_chooses() -> None:
+    """Fumbling in every room is not the same as never choosing in one.
+
+    Four refused keys, a choice, four more, a choice — under a bound of five,
+    this caller is never close to it. Counting refusals across rooms instead of
+    within one would end this walk, and it is a walk.
+    """
+    fumbler = ["9", "9", "9", "9", "1"] * 5
+    ctx = MockContext(choices=fumbler)
+    result = handle(ctx, "1234", seed=42, refused_keys_before_gone=5)
+    assert result["outcome"] == "succeed"
+
+
+def test_a_caller_who_fumbles_and_then_chooses_is_unaffected() -> None:
+    """The walk the fat-finger caller records is the clean caller's walk."""
+    clean = handle(MockContext(choices=["1"] * 5), "1234", seed=42)
+    fumbled = handle(MockContext(choices=["9", "1", "9", "9", "1", "1", "1", "1"]), "1234", seed=42)
+
+    assert fumbled["outcome"] == clean["outcome"] == "succeed"
+    assert fumbled["nodes_visited"] == clean["nodes_visited"]
+    assert fumbled["path"] == clean["path"]

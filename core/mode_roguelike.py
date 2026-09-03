@@ -2,8 +2,10 @@
 
 The tree is regenerated per Call Session, so node indices mean nothing outside
 one call. The walk ends one of two ways: the caller reaches the leaf and has the
-Code read to them, or they go quiet and the call is over — silence is the caller
-having gone, the same rule the other two Modes hold (see ``core.flow``, #53).
+Code read to them, or the line stops choosing and the call is over. Silence is
+the caller having gone, the same rule the other two Modes hold (see
+``core.flow``, #53); so is a key that comes back refused turn after turn in one
+room, which is a handset lying on a wedged key rather than a caller (#55).
 """
 
 from __future__ import annotations
@@ -36,7 +38,8 @@ class Walk(TypedDict):
     """What one caller did in the maze.
 
     ``outcome`` is how the walk ended: ``succeed`` if the Code was read out
-    (at the leaf, or at the depth bound), ``hangup`` if the caller went silent.
+    (at the leaf, or at the depth bound), ``hangup`` if the caller stopped
+    choosing — by going silent, or by holding down a key the room never offers.
     ``path`` is the keys they pressed and ``nodes_visited`` the rooms they stood
     in — rooms, not turns round the loop, so a caller who fumbles a key is not
     reported as having paced the corridor twice.
@@ -104,12 +107,21 @@ def make_tree(seed: int | None = None) -> list[Node]:
     return tree
 
 
+# How many keys in a row one room will take that are not among its choices
+# before the walk ends. Liveness, not lives: it is not counting wrong answers —
+# the maze has none to get wrong — it is noticing that nobody is choosing. Five
+# is far past a fat finger and far short of a caller's patience, and a caller
+# who fumbles, moves on and fumbles again in the next room never approaches it.
+REFUSED_KEYS_BEFORE_GONE = 5
+
+
 def handle(
     ctx: RoguelikeContext,
     code: str,
     seed: int | None = None,
     max_depth: int = 20,
     observer: CallObserver = NULL_OBSERVER,
+    refused_keys_before_gone: int = REFUSED_KEYS_BEFORE_GONE,
 ) -> Walk:
     """Walk the caller through the maze until they reach the leaf or leave."""
     tree = make_tree(seed=seed)
@@ -121,6 +133,9 @@ def handle(
     # The alternative — appending where `idx` moves — would list a room the
     # depth bound stops the caller from ever reaching.
     arrived = True
+    # Refused keys since the caller last chose something, reset by every choice
+    # they make — so this is bounded within one room, never across the walk.
+    refused = 0
 
     while len(path) < max_depth:
         node = tree[idx]
@@ -154,10 +169,21 @@ def handle(
             # A key that *was* pressed: somebody is there, they just missed. Ask
             # again, from the same room, and do not count it against them —
             # the maze has no attempt limit.
+            refused += 1
+            if refused >= refused_keys_before_gone:
+                # Except that the same refused key, over and over in one room,
+                # is not a caller missing: it is a handset lying on a wedged
+                # key, or anything on the line that keeps decoding as a digit.
+                # Nobody is choosing, so we read it the way we read silence —
+                # the caller has gone. Left unbounded this replays one room
+                # every 15 seconds forever, and `max_depth` cannot stop it,
+                # because a refused key makes no move for it to count (#55).
+                return Walk(outcome="hangup", path=path, nodes_visited=nodes_visited)
             arrived = False
             continue
 
         arrived = True
+        refused = 0
         path.append(choice)
         idx = choices[choice]
 

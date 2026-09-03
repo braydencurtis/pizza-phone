@@ -135,8 +135,11 @@ def test_roguelike_call_runs_and_persists(tmp_path: Path) -> None:
     records = asyncio.run(store.query())
     assert len(records) == 1
     assert records[0].mode == "roguelike"
-    # The call ran to a terminal outcome, not just started.
-    assert records[0].outcome in {"succeed", "fail"}
+    # The call ran to a terminal outcome, not just started. Which one is not
+    # fixed: the tree is regenerated per Call Session, and since #59 a walk that
+    # runs its bound out without finding the room is Exiled rather than handed
+    # the Code. A caller pressing "1" every time reaches either.
+    assert records[0].outcome in {"succeed", "exile"}
 
 
 # -- parity: the ARI seam reproduces AGI behaviour across every outcome -------
@@ -268,10 +271,13 @@ def test_a_silent_roguelike_caller_frees_the_booth_for_the_next_one(tmp_path: Pa
     # The silent call was torn down, and the next caller was never refused.
     assert ("hangup", "chan-1") in ari.calls
     assert ("answer", "chan-2") in ari.calls
-    assert ("hangup", "chan-2") not in ari.calls
 
     records = asyncio.run(store.query())
     assert len(records) == 2, "both callers were taken"
+    # A refused call is hung up without ever being answered and is never
+    # persisted, so two records with the second answered is the proof. Its
+    # outcome is not asserted: since #59 a maze walk can end either way, and
+    # what this test is about is that the caller got to walk at all.
     silent = asyncio.run(store.query(outcome="hangup"))
     assert len(silent) == 1
     assert silent[0].mode == "roguelike"
@@ -339,7 +345,6 @@ def test_a_wedged_key_in_the_maze_frees_the_booth_for_the_next_caller(tmp_path: 
     assert wedged_reads == REFUSED_KEYS_BEFORE_GONE
     assert ("hangup", "chan-1") in ari.calls
     assert ("answer", "chan-2") in ari.calls
-    assert ("hangup", "chan-2") not in ari.calls
 
     records = asyncio.run(store.query())
     assert len(records) == 2, "both callers were taken"

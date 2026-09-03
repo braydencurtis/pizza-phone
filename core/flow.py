@@ -12,6 +12,10 @@ Media identifiers (``prompt_media``, ``exile_media``, ``wrong_media``) are
 supplied by the caller because their naming is driver-specific — see
 ``CallIO``. Terminal outcomes are logged exactly once via the router.
 
+The maze is the one Mode a caller can lose without getting anything wrong: a
+walk that runs out its bound without finding the room ends in Exile, where it
+used to be handed the Code anyway (#59).
+
 Silence means the same thing in all three Modes: an empty ``read_dtmf`` is the
 caller having gone, so the call is torn down and the session ends on
 ``hangup``. It is the caller's commonest ending — a handset put down, or left
@@ -98,18 +102,27 @@ def run_roguelike(
     router: Router,
     *,
     choice_timeout_ms: int = ROGUELIKE_CHOICE_TIMEOUT_MS,
+    seed: int | None = None,
     observer: CallObserver = NULL_OBSERVER,
 ) -> dict[str, Any]:
-    """Roguelike mode: navigate the phone-tree, then deliver the code at the leaf.
+    """Roguelike mode: navigate the phone-tree, and win only by finding the room.
 
-    A caller who goes silent in the maze ends the call, exactly as they do in
-    the other two Modes — see the walker for why the maze could not stop them
-    on its own (#53). The walker returns the same ``hangup`` for a line that
-    keeps handing back a key the room does not offer (#55); both arrive here as
-    a walk nobody played, and are treated as one.
+    Three endings, all of them the walker's (``mode_roguelike.Walk``). Reaching
+    the leaf is the win. Walking the bound out without finding it is Exile, and
+    is a call the caller *played and lost* — so unlike the third ending it is
+    logged (#59). A caller who stops choosing — silent, or holding a key the
+    room does not offer — has gone, exactly as in the other two Modes (#53,
+    #55); that arrives here as a walk nobody played.
+
+    ``seed`` pins the tree, which is otherwise regenerated per Call Session. The
+    engine never passes one; it is how a test or the Fake PBX harness gets a
+    walk it can predict, the same reason ``mode_roguelike.handle`` takes one.
     """
     ctx = _RoguelikeCallIOContext(io, choice_timeout_ms)
-    walk = mode_roguelike.handle(ctx, router.config.code, observer=observer)
+    walk = mode_roguelike.handle(ctx, router.config.code, seed=seed, observer=observer)
+
+    if walk["outcome"] == "exile":
+        return _walked_out(io, router, walk)
 
     if walk["outcome"] == "hangup":
         # Not dispatched and not logged, exactly as in ``_run_code_entry``:
@@ -187,6 +200,27 @@ def _run_code_entry(
 
         io.play(wrong_media)
 
+    return result
+
+
+def _walked_out(io: CallIO, router: Router, walk: mode_roguelike.Walk) -> dict[str, Any]:
+    """The maze beat the caller: the ending has been spoken, so tear it down.
+
+    Logged, where ``_caller_left`` is not, and that is the whole distinction
+    between the two: this caller played the game and lost it, where the other
+    walked away from it. The record is built from the walk itself rather than
+    through ``Router.dispatch``, which for roguelike simulates a fresh random
+    walk and would file this loss under somebody else's rooms (#56).
+    """
+    result: dict[str, Any] = {
+        "mode": router.config.mode,
+        "outcome": "exile",
+        "attempts": len(walk["path"]),
+        "path": walk["path"],
+        "nodes_visited": walk["nodes_visited"],
+    }
+    router.logger.log({**result, "timestamp": datetime.now(UTC)})
+    io.hangup()
     return result
 
 

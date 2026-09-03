@@ -43,6 +43,22 @@ digits collected and the digits judged always come from the same config. Writes
 go through `config.write_config`, which replaces the file atomically — a call
 taking its snapshot mid-write can never read a truncated file. See issue #34.
 
+## The maze can be lost
+
+The Roguelike Phone-Tree has three endings and the walker owns all of them.
+Reaching the room that holds the Code is the win. Going quiet, or holding down a
+key the room does not offer, is the caller having gone (below). Making the Walk
+Bound's worth of moves — 20 — without ever finding that room is **Exile**: an
+ending is spoken and no Code is given.
+
+That last one used to deliver the Code as well, so the maze paid out however the
+walk ended. It was not a rare rail: pressing one key repeatedly follows a fixed
+chain through the rooms, and that chain usually closes into a loop of two or
+three, so about two callers in three who mash a single key end there rather than
+at the leaf. `flow._walked_out` logs the session, where `flow._caller_left` does
+not — the distinction being that an Exiled caller played the game and lost it,
+where the other walked away from it. See #59.
+
 ## Silence ends a call
 
 An empty `read_dtmf` means the caller has gone, and every mode flow treats it

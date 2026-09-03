@@ -192,6 +192,15 @@ def test_puzzle_exile_after_max_attempts(tmp_path: Path) -> None:
 
 
 # -- roguelike --
+#
+# The tree is regenerated per Call Session, so a walk on an unseeded tree can
+# end either way — and since #59 the two endings differ. Every test that cares
+# which one it got seeds the tree. `SOLVING_SEED` is a tree where pressing "1"
+# every time walks into the room holding the Code; `CYCLING_SEED` is one where
+# the same caller closes into a loop of two rooms and never finds it.
+
+SOLVING_SEED = 42
+CYCLING_SEED = 0
 
 
 def test_roguelike_navigates_and_routes_to_success(tmp_path: Path) -> None:
@@ -199,7 +208,7 @@ def test_roguelike_navigates_and_routes_to_success(tmp_path: Path) -> None:
     # plenty of "1" choices to walk to a terminal node
     io = FakeCallIO(dtmf=["1"] * 30)
 
-    result = flow.run_roguelike(io, router)
+    result = flow.run_roguelike(io, router, seed=SOLVING_SEED)
 
     assert result["mode"] == "roguelike"
     # the tree speaks prompts to the caller
@@ -520,7 +529,7 @@ def test_a_fat_finger_in_the_maze_is_still_forgiven(tmp_path: Path) -> None:
     router = _router(tmp_path, mode="roguelike", code="0000")
     io = FakeCallIO(dtmf=["9", "0", "9", *["1"] * 40])
 
-    result = flow.run_roguelike(io, router)
+    result = flow.run_roguelike(io, router, seed=SOLVING_SEED)
 
     assert result["outcome"] != "hangup"
     assert any("hang up and dial" in line.lower() for line in io.spoken)
@@ -619,7 +628,9 @@ def test_the_booth_takes_the_next_caller_after_a_wedged_key(tmp_path: Path) -> N
     flow.run_roguelike(wedged, _router(tmp_path, mode="roguelike", code="0000"))
 
     after = FakeCallIO(dtmf=["1"] * 40)
-    result = flow.run_roguelike(after, _router(tmp_path, mode="roguelike", code="0000"))
+    result = flow.run_roguelike(
+        after, _router(tmp_path, mode="roguelike", code="0000"), seed=SOLVING_SEED
+    )
 
     assert result["outcome"] == "succeed"
     assert after.succeeded is True
@@ -630,7 +641,87 @@ def test_a_fat_finger_in_every_room_is_still_forgiven(tmp_path: Path) -> None:
     router = _router(tmp_path, mode="roguelike", code="0000")
     io = FakeCallIO(dtmf=["9", "1", "0", "1", "9", "1", "#", "1", *["1"] * 40])
 
-    result = flow.run_roguelike(io, router)
+    result = flow.run_roguelike(io, router, seed=SOLVING_SEED)
 
     assert result["outcome"] != "hangup"
     assert any("hang up and dial" in line.lower() for line in io.spoken)
+
+
+# -- the maze can beat you (#59) ---------------------------------------------
+#
+# The walk is bounded, and running it out used to deliver the Code anyway — so
+# the maze paid out however the walk ended and could not beat anybody who kept
+# pressing keys it offered. It is Exile now: a flavoured disconnect, no Code,
+# and a *logged* session, because unlike a hangup this caller played and lost.
+#
+# The tree is random per call, so these seed it. `CYCLING_SEED` is a tree where
+# pressing "1" every time closes into a loop of two rooms — the caller mashing
+# one key, which is who mostly ends up here — and `SOLVING_SEED` is one where
+# the same caller walks into the room that holds the Code.
+
+def test_running_the_maze_out_exiles_the_caller(tmp_path: Path) -> None:
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = FakeCallIO(dtmf=["1"] * 40)
+
+    result = flow.run_roguelike(io, router, seed=CYCLING_SEED)
+
+    assert result["outcome"] == "exile"
+    assert io.hung_up is True
+    assert io.succeeded is False
+
+
+def test_an_exiled_maze_caller_is_never_read_the_code(tmp_path: Path) -> None:
+    """The point of the change: the maze stops giving the Code away."""
+    io = FakeCallIO(dtmf=["1"] * 40)
+
+    flow.run_roguelike(io, _router(tmp_path, mode="roguelike", code="0000"), seed=CYCLING_SEED)
+
+    assert not any("0000" in line for line in io.spoken)
+    assert not any("hang up and dial" in line.lower() for line in io.spoken)
+
+
+def test_an_exiled_maze_caller_is_logged_because_they_played(tmp_path: Path) -> None:
+    """The line between Exile and a hangup: one of them played and lost."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+
+    flow.run_roguelike(FakeCallIO(dtmf=["1"] * 40), router, seed=CYCLING_SEED)
+
+    lines = _log_lines(tmp_path)
+    assert len(lines) == 1
+    assert lines[0]["outcome"] == "exile"
+    assert lines[0]["mode"] == "roguelike"
+
+
+def test_an_exiled_maze_record_holds_the_walk_the_caller_made(tmp_path: Path) -> None:
+    """Their rooms, not a simulation's — the half of #56 this ending needs."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+
+    result = flow.run_roguelike(FakeCallIO(dtmf=["1"] * 40), router, seed=CYCLING_SEED)
+
+    assert result["path"] == ["1"] * 20  # every key they pressed, to the bound
+    assert result["attempts"] == 20
+    assert _log_lines(tmp_path)[0]["path"] == ["1"] * 20
+
+
+def test_a_caller_who_finds_the_room_still_wins(tmp_path: Path) -> None:
+    """Nothing changes for a caller who solves it."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = FakeCallIO(dtmf=["1"] * 40)
+
+    result = flow.run_roguelike(io, router, seed=SOLVING_SEED)
+
+    assert result["outcome"] == "succeed"
+    assert io.succeeded is True
+    assert io.hung_up is False
+    assert any("hang up and dial" in line.lower() for line in io.spoken)
+
+
+def test_a_caller_who_leaves_mid_maze_is_gone_not_exiled(tmp_path: Path) -> None:
+    """Silence is still somebody walking away, and still not logged."""
+    router = _router(tmp_path, mode="roguelike", code="0000")
+    io = FakeCallIO(dtmf=["1"])  # one room in, then the handset goes quiet
+
+    result = flow.run_roguelike(io, router, seed=CYCLING_SEED)
+
+    assert result["outcome"] == "hangup"
+    assert _log_lines(tmp_path) == []

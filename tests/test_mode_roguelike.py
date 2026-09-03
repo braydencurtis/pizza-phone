@@ -239,6 +239,30 @@ def test_finding_the_room_is_still_the_win_it_was() -> None:
     assert any("1234" in line for line in ctx.spoken)
 
 
+def test_a_last_move_into_the_room_is_a_win_not_an_exile() -> None:
+    """The bound is checked after the room is looked at, not before it.
+
+    Seed 3 puts the room holding the Code exactly two moves from the door. A
+    caller who spends their last legal move walking into it has found it — and
+    testing the bound first would Exile them while they stood there, without
+    the room ever being spoken, so they would not even hear what they reached.
+    """
+    ctx = MockContext(choices=["1", "1"])
+    result = handle(ctx, "1234", seed=3, max_depth=2)
+    assert result["outcome"] == "succeed"
+    assert any("1234" in line for line in ctx.spoken)
+
+
+def test_an_exiled_caller_hears_the_room_they_ended_in() -> None:
+    """They stop somewhere, and where they stopped is worth narrating."""
+    ctx = MockContext(choices=["1"] * 30)
+    result = handle(ctx, "1234", seed=0, max_depth=3)
+    # Four rooms stood in for three moves made: the door, and one per move.
+    assert len(result["nodes_visited"]) == 4
+    assert len(ctx.spoken) == 5  # four rooms, then the ending
+    assert ctx.spoken[-1] == EXILE_TEXT
+
+
 def test_a_caller_who_leaves_before_the_bound_is_gone_not_exiled() -> None:
     """Silence is still somebody walking away, not the maze beating them."""
     ctx = MockContext(choices=["1"])

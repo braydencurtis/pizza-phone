@@ -395,10 +395,10 @@ DEFAULT_SCENARIOS: tuple[Scenario, ...] = (
         code="8675",
         dtmf=("1",) * 40,
         caller_id="+15550003001",
-        # Either ending is a pass. The tree is regenerated per Call Session, and
-        # a caller pressing one key follows a fixed chain through the rooms that
-        # usually closes into a loop — so this synthetic caller is Exiled about
-        # two runs in three and finds the Code in the other (#59).
+        # Either ending is a pass, and the harness cannot pin which: the tree is
+        # regenerated per Call Session, and a caller pressing one key follows a
+        # fixed chain through the rooms that usually closes into a loop, so this
+        # synthetic caller is Exiled more often than not (#59).
         expect=frozenset({"succeed", "exile"}),
     ),
     Scenario(

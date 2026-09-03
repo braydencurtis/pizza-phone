@@ -24,7 +24,7 @@ this code did not.
 - `mode_tweeted.py` / `mode_puzzle.py` / `mode_roguelike.py` — per-mode logic;
   `mode_puzzle` also holds `PuzzleSelector`; `mode_roguelike` holds tree
   generation + navigation, and returns a `Walk` — where the caller went and
-  which of the two ways it ended.
+  which of the three ways it ended.
 - `headless.py` — headless roguelike walker (used by the router and tooling).
 - `tts.py` — text-to-speech backends (espeak / flite / macOS `say`).
 - `code_manager.py` — field-level edits to Global Config (rotate the code,
@@ -54,8 +54,9 @@ ending is spoken and no Code is given.
 That last one used to deliver the Code as well, so the maze paid out however the
 walk ended. It was not a rare rail: pressing one key repeatedly follows a fixed
 chain through the rooms, and that chain usually closes into a loop of two or
-three, so about two callers in three who mash a single key end there rather than
-at the leaf. `flow._walked_out` logs the session, where `flow._caller_left` does
+three, so most callers who mash a single key end there rather than at the leaf.
+CONTEXT.md's *Walking the maze out* row holds the measurements, and is the one
+place they live. `flow._walked_out` logs the session, where `flow._caller_left` does
 not — the distinction being that an Exiled caller played the game and lost it,
 where the other walked away from it. See #59.
 

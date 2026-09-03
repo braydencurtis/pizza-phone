@@ -34,6 +34,7 @@ testable with none.
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -114,15 +115,18 @@ def run_roguelike(
     room does not offer — has gone, exactly as in the other two Modes (#53,
     #55); that arrives here as a walk nobody played.
 
-    ``seed`` pins the tree, which is otherwise regenerated per Call Session. The
-    engine never passes one; it is how a test or the Fake PBX harness gets a
-    walk it can predict, the same reason ``mode_roguelike.handle`` takes one.
+    ``seed`` pins the tree, which is otherwise regenerated per Call Session.
+    Nothing in the engine passes one — it is how a test gets a walk it can
+    predict, the same reason ``mode_roguelike.handle`` takes one, and it is
+    needed here because which of the three endings a walk reaches is otherwise
+    a roll of the dice.
     """
     ctx = _RoguelikeCallIOContext(io, choice_timeout_ms)
+    started = time.monotonic()
     walk = mode_roguelike.handle(ctx, router.config.code, seed=seed, observer=observer)
 
     if walk["outcome"] == "exile":
-        return _walked_out(io, router, walk)
+        return _walked_out(io, router, walk, round(time.monotonic() - started, 3))
 
     if walk["outcome"] == "hangup":
         # Not dispatched and not logged, exactly as in ``_run_code_entry``:
@@ -203,7 +207,9 @@ def _run_code_entry(
     return result
 
 
-def _walked_out(io: CallIO, router: Router, walk: mode_roguelike.Walk) -> dict[str, Any]:
+def _walked_out(
+    io: CallIO, router: Router, walk: mode_roguelike.Walk, duration: float
+) -> dict[str, Any]:
     """The maze beat the caller: the ending has been spoken, so tear it down.
 
     Logged, where ``_caller_left`` is not, and that is the whole distinction
@@ -216,10 +222,14 @@ def _walked_out(io: CallIO, router: Router, walk: mode_roguelike.Walk) -> dict[s
         "mode": router.config.mode,
         "outcome": "exile",
         "attempts": len(walk["path"]),
+        "duration": duration,
         "path": walk["path"],
-        "nodes_visited": walk["nodes_visited"],
     }
-    router.logger.log({**result, "timestamp": datetime.now(UTC)})
+    # ``nodes_visited`` is logged but not returned, which is how ``dispatch``
+    # splits them too: the rooms are for the history, not for the engine.
+    router.logger.log(
+        {**result, "nodes_visited": walk["nodes_visited"], "timestamp": datetime.now(UTC)}
+    )
     io.hangup()
     return result
 

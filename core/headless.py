@@ -37,6 +37,14 @@ def run_roguelike(
     result = mode_roguelike.handle(ctx, code, seed=seed)
     path = result["path"]
     return {
+        # Deliberately NOT ``result["outcome"]``, and that is a trap rather than
+        # a decision. Since #59 a simulated walk can be Exiled, and reporting
+        # that honestly would be worse than this lie: the only caller of this
+        # function is ``Router.dispatch``, which runs it *instead of* looking at
+        # the real caller's walk, so an honest "exile" here would file a live
+        # caller's win as a loss about one time in four. The lie is inert only
+        # because ``flow.run_roguelike`` intercepts a real Exile before
+        # dispatching. #56 removes the simulation, and this with it.
         "outcome": "succeed" if path else "fail",
         "path": path,
         "nodes_visited": result["nodes_visited"],

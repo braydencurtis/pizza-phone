@@ -148,7 +148,7 @@ def handle(
     # they make — so this is bounded within one room, never across the walk.
     refused = 0
 
-    while len(path) < max_depth:
+    while True:
         node = tree[idx]
         terminal = _is_terminal(node)
         # Depth is the moves *made* — `len(path)`, not the times round this
@@ -165,6 +165,14 @@ def handle(
 
         if terminal:
             return _deliver(ctx, code, path, nodes_visited)
+
+        # The bound is checked *here*, after the room has been looked at and
+        # narrated, not at the top of the loop. A caller whose last legal move
+        # lands them in the room holding the Code has found it, and testing the
+        # bound first would Exile them while they stood in it — with the room
+        # never spoken, so they would not even hear what they had reached.
+        if len(path) >= max_depth:
+            return _exiled(ctx, path, nodes_visited)
 
         choices = cast(ChoiceNode, node)["choices"]
         choice = ctx.read_choice("".join(choices.keys()))
@@ -198,8 +206,6 @@ def handle(
         path.append(choice)
         idx = choices[choice]
 
-    return _exiled(ctx, path, nodes_visited)
-
 
 def _exiled(ctx: RoguelikeContext, path: list[str], nodes_visited: list[int]) -> Walk:
     """The caller walked the bound out without finding the room: Exile (#59).
@@ -208,8 +214,9 @@ def _exiled(ctx: RoguelikeContext, path: list[str], nodes_visited: list[int]) ->
     walk ended and could not beat anybody who kept pressing keys it offered.
     Nor was it a rare consolation: pressing one key repeatedly follows a fixed
     chain through the rooms, and that chain usually closes into a loop of two or
-    three of them, so roughly two in three callers who mash a single key end
-    here rather than at the leaf. They now leave with the ending and no Code.
+    three of them, so most callers who mash a single key end here rather than at
+    the leaf. They now leave with the ending and no Code. CONTEXT.md's *Walking
+    the maze out* row carries the measurements, and is the one place they live.
     """
     ctx.speak(EXILE_TEXT)
     return Walk(outcome="exile", path=path, nodes_visited=nodes_visited)

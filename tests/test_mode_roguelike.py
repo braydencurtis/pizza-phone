@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.mode_roguelike import REFUSED_KEYS_BEFORE_GONE, handle, make_tree
+from core.mode_roguelike import EXILE_TEXT, REFUSED_KEYS_BEFORE_GONE, handle, make_tree
 
 
 class MockContext:
@@ -190,12 +190,85 @@ def test_reaching_the_leaf_is_a_success() -> None:
     assert result["outcome"] == "succeed"
 
 
-def test_the_depth_bound_still_delivers_the_code() -> None:
-    """A walk that never finds the leaf is not a caller who walked away."""
+# -- walking the maze out is a loss (#59) ------------------------------------
+#
+# The walk is bounded at `max_depth` moves. That bound used to read the Code out
+# too, so the maze paid out either way and could not beat anybody who kept
+# pressing keys it offered — and on the real generator, 22.7% of walks reached
+# the Code that way rather than by finding the room. The caller could not tell
+# the two apart: same voice, same four digits. Now running the walk out is
+# Exile, and the leaf is the only way to win.
+
+
+def test_running_the_walk_out_is_an_exile_not_a_win() -> None:
     ctx = MockContext(choices=["1"] * 30)
     result = handle(ctx, "1234", seed=42, max_depth=1)
+    assert result["outcome"] == "exile"
+
+
+def test_a_caller_who_runs_the_walk_out_is_never_read_the_code() -> None:
+    """The whole point: the maze stops giving the Code away."""
+    ctx = MockContext(choices=["1"] * 30)
+    handle(ctx, "1234", seed=42, max_depth=1)
+    assert not any("1234" in line for line in ctx.spoken)
+
+
+def test_the_maze_says_something_before_it_lets_go() -> None:
+    """Exile is a flavoured disconnect, not a dead line (CONTEXT.md)."""
+    ctx = MockContext(choices=["1"] * 30)
+    handle(ctx, "1234", seed=42, max_depth=1)
+    assert ctx.spoken[-1] == EXILE_TEXT
+
+
+def test_an_exiled_walk_still_reports_where_the_caller_went() -> None:
+    """They played, and how far they got is the record's whole interest."""
+    # Seed 0 is a tree where pressing "1" closes into a loop of two rooms, so
+    # this caller walks the bound out without ever nearing the room.
+    ctx = MockContext(choices=["1"] * 30)
+    result = handle(ctx, "1234", seed=0, max_depth=3)
+    assert result["outcome"] == "exile"
+    assert result["path"] == ["1", "1", "1"]
+    assert result["nodes_visited"][0] == 0
+
+
+def test_finding_the_room_is_still_the_win_it_was() -> None:
+    """Nothing changes for a caller who solves it."""
+    ctx = MockContext(choices=["1"] * 5)
+    result = handle(ctx, "1234", seed=42)
     assert result["outcome"] == "succeed"
     assert any("1234" in line for line in ctx.spoken)
+
+
+def test_a_last_move_into_the_room_is_a_win_not_an_exile() -> None:
+    """The bound is checked after the room is looked at, not before it.
+
+    Seed 3 puts the room holding the Code exactly two moves from the door. A
+    caller who spends their last legal move walking into it has found it — and
+    testing the bound first would Exile them while they stood there, without
+    the room ever being spoken, so they would not even hear what they reached.
+    """
+    ctx = MockContext(choices=["1", "1"])
+    result = handle(ctx, "1234", seed=3, max_depth=2)
+    assert result["outcome"] == "succeed"
+    assert any("1234" in line for line in ctx.spoken)
+
+
+def test_an_exiled_caller_hears_the_room_they_ended_in() -> None:
+    """They stop somewhere, and where they stopped is worth narrating."""
+    ctx = MockContext(choices=["1"] * 30)
+    result = handle(ctx, "1234", seed=0, max_depth=3)
+    # Four rooms stood in for three moves made: the door, and one per move.
+    assert len(result["nodes_visited"]) == 4
+    assert len(ctx.spoken) == 5  # four rooms, then the ending
+    assert ctx.spoken[-1] == EXILE_TEXT
+
+
+def test_a_caller_who_leaves_before_the_bound_is_gone_not_exiled() -> None:
+    """Silence is still somebody walking away, not the maze beating them."""
+    ctx = MockContext(choices=["1"])
+    result = handle(ctx, "1234", seed=42, max_depth=10)
+    assert result["outcome"] == "hangup"
+    assert EXILE_TEXT not in ctx.spoken
 
 
 # -- a key that never becomes a choice ends the walk too (#55) ---------------

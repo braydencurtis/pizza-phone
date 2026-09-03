@@ -35,7 +35,9 @@ from engine.call_store import CallRecord
 # - ``in_mode``    the mode handler is running: the caller is being played to
 #                  and is dialling.
 # - ``handed_off`` the caller won and left for the success dialplan (see above).
-# - ``exiled``     the caller burned the Attempt Limit and got the Exile message.
+# - ``exiled``     the caller lost and got the Exile message: they burned the
+#                  Attempt Limit, or walked the Roguelike Phone-Tree's bound out
+#                  without finding the room holding the Code (#59).
 # - ``hung_up``    the call ended without a win and without Exile.
 # - ``dropped``    the *engine* ended the call — a failure upstairs, not
 #                  anything the caller did. Kept apart from ``hung_up`` for the

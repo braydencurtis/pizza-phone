@@ -1,8 +1,9 @@
 """The Roguelike Phone-Tree: an infinite DTMF maze with no lives and no limit.
 
 The tree is regenerated per Call Session, so node indices mean nothing outside
-one call. The walk ends one of two ways: the caller reaches the leaf and has the
-Code read to them, or the line stops choosing and the call is over. Silence is
+one call. The walk ends one of three ways: the caller reaches the leaf and has
+the Code read to them, they walk the bound out without ever finding it and are
+Exiled (#59), or the line stops choosing and the call is over. Silence is
 the caller having gone, the same rule the other two Modes hold (see
 ``core.flow``, #53); so is a key that comes back refused turn after turn in one
 room, which is a handset lying on a wedged key rather than a caller (#55).
@@ -37,9 +38,10 @@ Node = ChoiceNode | TerminalNode
 class Walk(TypedDict):
     """What one caller did in the maze.
 
-    ``outcome`` is how the walk ended: ``succeed`` if the Code was read out
-    (at the leaf, or at the depth bound), ``hangup`` if the caller stopped
-    choosing — by going silent, or by holding down a key the room never offers.
+    ``outcome`` is how the walk ended: ``succeed`` if the Code was read out,
+    which now happens only at the leaf; ``exile`` if the walk ran out its bound
+    without finding it; ``hangup`` if the caller stopped choosing — by going
+    silent, or by holding down a key the room never offers.
     ``path`` is the keys they pressed and ``nodes_visited`` the rooms they stood
     in — rooms, not turns round the loop, so a caller who fumbles a key is not
     reported as having paced the corridor twice.
@@ -115,6 +117,15 @@ def make_tree(seed: int | None = None) -> list[Node]:
 # fumbles, moves on and fumbles again in the next room never approaches it.
 REFUSED_KEYS_BEFORE_GONE = 5
 
+# PLACEHOLDER COPY. The Prompt Library is team-authored (CONTEXT.md), and the
+# real words are being written against a working booth rather than in front of
+# one (#59). This is here so the mechanic can ship; it is not signed-off lore.
+EXILE_TEXT = (
+    "You have been walking a long time. The corridor folds back on itself, "
+    "the lights go out one at a time, and the hum stops. "
+    "There is no code here tonight."
+)
+
 
 def handle(
     ctx: RoguelikeContext,
@@ -137,7 +148,7 @@ def handle(
     # they make — so this is bounded within one room, never across the walk.
     refused = 0
 
-    while len(path) < max_depth:
+    while True:
         node = tree[idx]
         terminal = _is_terminal(node)
         # Depth is the moves *made* — `len(path)`, not the times round this
@@ -154,6 +165,14 @@ def handle(
 
         if terminal:
             return _deliver(ctx, code, path, nodes_visited)
+
+        # The bound is checked *here*, after the room has been looked at and
+        # narrated, not at the top of the loop. A caller whose last legal move
+        # lands them in the room holding the Code has found it, and testing the
+        # bound first would Exile them while they stood in it — with the room
+        # never spoken, so they would not even hear what they had reached.
+        if len(path) >= max_depth:
+            return _exiled(ctx, path, nodes_visited)
 
         choices = cast(ChoiceNode, node)["choices"]
         choice = ctx.read_choice("".join(choices.keys()))
@@ -187,7 +206,20 @@ def handle(
         path.append(choice)
         idx = choices[choice]
 
-    return _deliver(ctx, code, path, nodes_visited)
+
+def _exiled(ctx: RoguelikeContext, path: list[str], nodes_visited: list[int]) -> Walk:
+    """The caller walked the bound out without finding the room: Exile (#59).
+
+    This exit used to run ``_deliver`` as well, so the maze paid out however the
+    walk ended and could not beat anybody who kept pressing keys it offered.
+    Nor was it a rare consolation: pressing one key repeatedly follows a fixed
+    chain through the rooms, and that chain usually closes into a loop of two or
+    three of them, so most callers who mash a single key end here rather than at
+    the leaf. They now leave with the ending and no Code. CONTEXT.md's *Walking
+    the maze out* row carries the measurements, and is the one place they live.
+    """
+    ctx.speak(EXILE_TEXT)
+    return Walk(outcome="exile", path=path, nodes_visited=nodes_visited)
 
 
 def _gone(path: list[str], nodes_visited: list[int]) -> Walk:

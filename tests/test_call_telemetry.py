@@ -170,10 +170,11 @@ def test_a_roguelike_walk_reports_its_mode_and_a_terminal_state(tmp_path: Path) 
     arc = _arc(snapshots)
 
     # The maze walks a freshly generated tree, so where it ends is not fixed:
-    # handed off at the leaf, or the line going dead — but never Exiled, since
-    # roguelike has no attempt limit and no code entry.
+    # handed off at the room holding the Code, Exiled for walking the bound out
+    # without finding it (#59), or the line going dead. Not from an attempt
+    # limit — the maze still has none — but from losing, which it now can be.
     assert arc[:3] == [None, "answering", "in_mode"]
-    assert arc[3] in {"handed_off", "hung_up"}
+    assert arc[3] in {"handed_off", "exiled", "hung_up"}
     assert arc[4:] == [None]
 
     call = snapshots[-2]["call"]

@@ -15,8 +15,11 @@ Mode = Literal["tweeted", "puzzle", "roguelike"]
 # "hangup" would quietly credit the caller with walking away and poison every
 # count drawn off the history.
 Outcome = Literal["succeed", "fail", "exile", "hangup", "dropped"]
-# The two ways a Walk through the Roguelike Phone-Tree can end, and a subset of
-# Outcome: the Code read out, or the caller gone. The maze has neither Exile nor
-# anything to get wrong — "no lives or attempt limits" (CONTEXT.md) — so the
-# other two outcomes cannot arise there.
-WalkOutcome = Literal["succeed", "hangup"]
+# The three ways a Walk through the Roguelike Phone-Tree can end, and a subset
+# of Outcome: the Code read out at the room that holds it, the caller gone, or
+# the walk run out to its bound without ever finding that room — which is Exile,
+# the same flavoured disconnect the other Modes give a caller who runs out of
+# attempts (#59). The maze still has nothing to get *wrong*, so "no lives or
+# attempt limits" holds; what it now has is a way to lose. "fail" is the one
+# Outcome that cannot arise here: a walk either found the room or it did not.
+WalkOutcome = Literal["succeed", "hangup", "exile"]
